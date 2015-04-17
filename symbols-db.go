@@ -109,18 +109,3 @@ func (db *SymbolsDB) GetFunctions(name string) ([]*Function, error) {
 
     return rs, nil
 }
-
-func main() {
-    db, err := OpenSymbolsDB(".dbsymbols")
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    fun := &Function{"f", "a.c", 10, 5}
-    db.InsertFunction(fun)
-
-    funs, _ := db.GetFunctions("f")
-    for _, f := range funs {
-        log.Println(f)
-    }
-}
