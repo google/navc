@@ -109,3 +109,12 @@ func (db *SymbolsDB) GetFunctions(name string) ([]*Function, error) {
 
     return rs, nil
 }
+
+func (db *SymbolsDB) CheckUpToDate(file string) bool {
+    //TODO: check if this file exist and is up to date. If not, return false.
+    return false
+}
+
+func (db *SymbolsDB) RemoveFileReferences(file string) {
+    //TODO: remove all the references to this file in the index
+}
