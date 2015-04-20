@@ -1,0 +1,10 @@
+navc is a daemon to index and navigate your C code. It watches for all file
+changes and automatically update the index. It provides a RPC API to ask for
+definition, declaration, calls, and uses of some symbol. This API can be used
+by any editor plugin to point to the correct location of the looked up symbol.
+navc uses clang to parse the file. Having the abstract syntax tree of the code
+can be very powerful as it can know with greater exactitude the location of the
+declaration or definition being looked up. The project is limited to C for now,
+but it can be extended to C++ as clang it is able to parse it.
+
+navc is in its early stages. There is still plenty of code to be written.
