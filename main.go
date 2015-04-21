@@ -21,6 +21,8 @@ import (
     "flag"
     "runtime"
     "os"
+    "regexp"
+    fsnotify "gopkg.in/fsnotify.v1"
 )
 
 //TODO: How are we handling removed files?
@@ -39,12 +41,12 @@ func processFile(files chan string, db *SymbolsDB) {
     }
 }
 
-func exploreDirsToIndex(indexDir []string, files chan string) error {
-    toExplore := indexDir
+func exploreDirsToIndex(toExplore []string, visitDir func(string),
+                        visitC func(string)) error {
     for len(toExplore) > 0 {
         // dequeue first path
         path := toExplore[0]
-	toExplore = toExplore[1:]
+        toExplore = toExplore[1:]
 
         f, err := os.Open(path)
         if err != nil {
@@ -56,29 +58,33 @@ func exploreDirsToIndex(indexDir []string, files chan string) error {
             return err
         }
 
+        // visit file
         if !info.IsDir() {
-            // TODO: return error
+            // ignore non-C files
+            validC, _ := regexp.MatchString(`.*\.[ch]`, path)
+            if validC {
+                visitC(path)
+            }
+            continue
+        } else {
+            visitDir(path)
         }
 
+        // add all the files in the directory to explore
         dirFiles, err := f.Readdir(0)
         if err != nil {
             return err
         }
 
-        // interate through all the files in the directory
         for _, subf := range dirFiles {
-            //ignore hidden files
+            // ignore hidden files
             if subf.Name()[0] == '.' {
                 continue
             }
 
-	    relPath := path + "/" + subf.Name()
+            relPath := path + "/" + subf.Name()
 
-            if subf.IsDir() {
-		toExplore = append(toExplore, relPath)
-            } else {
-                files <- relPath
-            }
+            toExplore = append(toExplore, relPath)
         }
     }
 
@@ -118,7 +124,31 @@ func main() {
     }
 
     // explore all the directories in indexDir and process all files
-    exploreDirsToIndex(indexDir, files)
+    watcher, _ := fsnotify.NewWatcher()
+    visitorDir := func(path string) {
+        // add watcher to directory
+        watcher.Add(path)
+    }
+    visitorC := func(path string) {
+        // put file in channel
+        files <- path
+        // TODO: update set to know what files to remove
+        // add watcher
+        watcher.Add(path)
+    }
+    exploreDirsToIndex(indexDir, visitorDir, visitorC)
+
+    /*
+    TODO: working example of fsnotify
+    go func() {
+        for {
+            select {
+                case event := <-watcher.Events:
+                log.Println("event", event, event.Name)
+            }
+        }
+    }()
+    */
 
     /*
     funs, _ := db.GetFunctions("main")
@@ -126,4 +156,8 @@ func main() {
         log.Println(f)
     }
     */
+
+    // TODO: wait for threads to finish
+    done := make(chan int)
+    <-done
 }
