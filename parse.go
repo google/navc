@@ -22,6 +22,10 @@ import (
 )
 
 func Parse(file string, db *SymbolsDB) {
+    // insert file in DB first
+    db.InsertFile(file)
+
+    // insert symbols
     idx := clang.NewIndex(0, 1)
     defer idx.Dispose()
 

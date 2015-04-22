@@ -33,13 +33,15 @@ type Function struct {
 type SymbolsDB struct {
     db          *sql.DB
 
+    insertFile  *sql.Stmt
     insertFunc  *sql.Stmt
     selectFunc  *sql.Stmt
+    delFileRef  *sql.Stmt
 }
 
 func (db *SymbolsDB) empty() bool {
     rows, err := db.db.Query(`SELECT name FROM sqlite_master
-                            WHERE type='table' AND name='functions'`)
+                            WHERE type='table' AND name='files'`)
     if err != nil {
         log.Fatal(err)
     }
@@ -49,18 +51,24 @@ func (db *SymbolsDB) empty() bool {
 
 func (db *SymbolsDB) initDB() {
     initStmt := `
-        CREATE TABLE functions (
+        CREATE TABLE files (
+            id      INTEGER,
+            hash    BLOB UNIQUE,
+            path    TEXT UNIQUE,
+            PRIMARY KEY(id)
+        );
+        CREATE TABLE func_defs (
             name    TEXT,
-            file    TEXT,
+            file    INTEGER,
             line    INTEGER,
             col     INTEGER,
-            PRIMARY KEY(name, file)
+            PRIMARY KEY(name, file),
+            FOREIGN KEY(file) REFERENCES files(id) ON DELETE CASCADE
         );
-        DELETE FROM functions
     `
     _, err := db.db.Exec(initStmt)
     if err != nil {
-        log.Fatal(err)
+        log.Fatal("init", err)
     }
 }
 
@@ -72,12 +80,24 @@ func OpenSymbolsDB(path string) (*SymbolsDB, error) {
 
     r := &SymbolsDB{db: db}
 
+    db.Exec(`PRAGMA foreign_keys = ON;`)
+
     if r.empty() {
         r.initDB()
     }
 
+    insertFile, err := db.Prepare(`
+        INSERT INTO files(path, hash) VALUES (?, ?);
+    `)
+    if err != nil {
+        return nil, err
+    }
+    r.insertFile = insertFile
+
     insertFunc, err := db.Prepare(`
-        INSERT INTO functions(name, file, line, col) values (?, ?, ?, ?);
+        INSERT INTO func_defs(name, file, line, col)
+            SELECT ?, id, ?, ? FROM files
+            WHERE path = ?;
     `)
     if err != nil {
         return nil, err
@@ -85,18 +105,34 @@ func OpenSymbolsDB(path string) (*SymbolsDB, error) {
     r.insertFunc = insertFunc
 
     selectFunc, err := db.Prepare(`
-        SELECT * FROM functions WHERE name=?
+        SELECT name, path, line, col FROM func_defs, files
+        WHERE name = ? AND id = file;
     `)
     if err != nil {
         return nil, err
     }
     r.selectFunc = selectFunc
 
+    delFileRef, err := db.Prepare(`
+        DELETE FROM files WHERE path = ?;
+    `)
+    r.delFileRef = delFileRef
+
     return r, nil
 }
 
+func (db *SymbolsDB) InsertFile(path string) error {
+    // TODO: calculate sha1
+    _, err := db.insertFile.Exec(path, nil)
+    if err != nil {
+        return err
+    }
+
+    return nil
+}
+
 func (db *SymbolsDB) InsertFunction(fun *Function) error {
-    _, err := db.insertFunc.Exec(fun.name, fun.file, fun.line, fun.col)
+    _, err := db.insertFunc.Exec(fun.name, fun.line, fun.col, fun.file)
     if err != nil {
         return err
     }
@@ -131,6 +167,11 @@ func (db *SymbolsDB) CheckUpToDate(file string) bool {
     return false
 }
 
-func (db *SymbolsDB) RemoveFileReferences(file string) {
-    //TODO: remove all the references to this file in the index
+func (db *SymbolsDB) RemoveFileReferences(file string) error {
+    _, err := db.delFileRef.Exec(file)
+    if err != nil {
+        return err
+    }
+
+    return nil
 }
