@@ -14,6 +14,36 @@
  * limitations under the License.
  */
 
+ /*
+  * We can do something more interesting than simply look for symbols. Given that
+  * we are parsing the whole file, we can create more tight dependencies between
+  * symbols use and its declaration. We can create a symbol table where we keep
+  * all the declarations of symbols and its location. Whenever we find a symbol
+  * used, we look at the symbol table and insert the symbol use in the DB as well
+  * as a foreign key to its declaration. We can do the same on function definitions.
+  * This way, if the definition is available, we can know for sure the exact
+  * function that is being called by joining the function definition and
+  * the symbol use table. This is also true for variables.
+  *
+  * The symbol table can be implemented as a hash table of stacks. When we find
+  * the declaration of a symbol, we insert the symbol in the hash. When its
+  * scope is over, we remove it. Note that symbols with the same name will be
+  * occasionally inserted in the table but this should work as long as the inner
+  * symbol is first in the hash entry stack. To know what symbols to extract from
+  * the symbol table, we have a separate stack where we put symbols as we find
+  * them. Whenver a new block starts, we insert a special "start of block" symbol.
+  * When the block ends, we can pop from the stack and the symbol table all the
+  * symbols until we find the "start of block" especial symbol. This will ensure
+  * that we pop all the symbols in the closing block.
+  *
+  * In terms of the DB, we need to create two more tables: (1) Symbols declaration,
+  * (2) Symbols used. Function definitions table and symbols used table will have
+  * a foreign key to symbols declaration. This should always be non-NULL as we
+  * need a declaration in order to use the symbol (it wouldn't compile). Also
+  * note that we may have more than one definition for a function in case there
+  * are pre-processor conditions. We need to check for that.
+  */
+
 package main
 
 import (
@@ -22,16 +52,16 @@ import (
 )
 
 func Parse(file string, db *SymbolsDB) {
-    // insert file in DB first
-    db.InsertFile(file)
+    // files already inserted in the DB from this parsing
+    insertedFiles := map[string]bool{ file: true }
 
     // insert symbols
-    idx := clang.NewIndex(0, 1)
+    idx := clang.NewIndex(0, 0)
     defer idx.Dispose()
 
     args := []string{}
 
-    tu := idx.Parse(file, args, nil, 0)
+    tu := idx.Parse(file, args, nil, clang.TU_DetailedPreprocessingRecord)
     defer tu.Dispose()
 
     visitNode := func (cursor, parent clang.Cursor) clang.ChildVisitResult {
@@ -39,16 +69,31 @@ func Parse(file string, db *SymbolsDB) {
             return clang.CVR_Continue
         }
 
+        f, line, col, _ := cursor.Location().GetFileLocation()
+        fName := f.Name()
+
+        if fName == "" {
+            // ignore system code
+            return clang.CVR_Continue
+        }
+
         fmt.Printf("%s: %s (%s)\n",
             cursor.Kind().Spelling(), cursor.Spelling(), cursor.USR())
-        fName, line, col, _ := cursor.Location().GetFileLocation()
-        fmt.Println(fName.Name(), ":", line, col)
+        fmt.Println(fName, ":", line, col)
+
+        if !insertedFiles[fName] {
+            db.NeedToProcessFile(fName)
+            insertedFiles[fName] = true
+        }
 
         switch cursor.Kind() {
         case clang.CK_FunctionDecl:
-            fun := &Function{cursor.Spelling(), fName.Name(), int(line), int(col)}
-            db.InsertFunction(fun)
-            //TODO: recurse when looking for variables and funtion calls
+            fun := &Symbol{cursor.Spelling(), fName, int(line), int(col)}
+            db.InsertSymbol(fun)
+            // TODO: check if this is the function definition too
+
+            return clang.CVR_Recurse
+        case clang.CK_InclusionDirective:
             return clang.CVR_Continue
         }
         return clang.CVR_Continue

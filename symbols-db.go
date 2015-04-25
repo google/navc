@@ -14,15 +14,23 @@
  * limitations under the License.
  */
 
+/* TODO: should we consider the case where multiple declarations and multiple
+ * definitions exist for the same symbol? This could happen before C
+ * preprocesor */
+
 package main
 
 import (
     "database/sql"
     _ "github.com/mattn/go-sqlite3"
     "log"
+    "bytes"
+    "io"
+    "crypto/sha1"
+    "os"
 )
 
-type Function struct {
+type Symbol struct {
     name    string
     file    string
     line    int
@@ -31,12 +39,13 @@ type Function struct {
 
 //TODO: we need destructors to close all statements and open DB
 type SymbolsDB struct {
-    db          *sql.DB
+    db              *sql.DB
 
-    insertFile  *sql.Stmt
-    insertFunc  *sql.Stmt
-    selectFunc  *sql.Stmt
-    delFileRef  *sql.Stmt
+    insertFile      *sql.Stmt
+    selectFileHash  *sql.Stmt
+    insertSymb      *sql.Stmt
+    selectSymb      *sql.Stmt
+    delFileRef      *sql.Stmt
 }
 
 func (db *SymbolsDB) empty() bool {
@@ -57,13 +66,29 @@ func (db *SymbolsDB) initDB() {
             path    TEXT UNIQUE,
             PRIMARY KEY(id)
         );
-        CREATE TABLE func_defs (
+        CREATE TABLE symbol_decls (
             name    TEXT,
             file    INTEGER,
             line    INTEGER,
             col     INTEGER,
-            PRIMARY KEY(name, file),
+            PRIMARY KEY(name, file, line, col),
             FOREIGN KEY(file) REFERENCES files(id) ON DELETE CASCADE
+        );
+        CREATE TABLE func_defs (
+            name        TEXT,
+            file        INTEGER,
+            line        INTEGER,
+            col         INTEGER,
+
+            def_file    INTEGER,
+            def_line    INTEGER,
+            def_col     INTEGER,
+
+            PRIMARY KEY(name, file, line, col),
+            FOREIGN KEY(file) REFERENCES files(id) ON DELETE CASCADE,
+
+            FOREIGN KEY(name, def_file, def_line, def_col)
+                REFERENCES symbol_decls(name, file, line, col) ON DELETE CASCADE
         );
     `
     _, err := db.db.Exec(initStmt)
@@ -86,44 +111,49 @@ func OpenSymbolsDB(path string) (*SymbolsDB, error) {
         r.initDB()
     }
 
-    insertFile, err := db.Prepare(`
+    r.insertFile, err = db.Prepare(`
         INSERT INTO files(path, hash) VALUES (?, ?);
     `)
     if err != nil {
         return nil, err
     }
-    r.insertFile = insertFile
 
-    insertFunc, err := db.Prepare(`
-        INSERT INTO func_defs(name, file, line, col)
+    r.selectFileHash, err = db.Prepare(`
+        SELECT hash FROM files WHERE path = ?;
+    `)
+    if err != nil {
+        return nil, err
+    }
+
+    r.insertSymb, err = db.Prepare(`
+        INSERT INTO symbol_decls(name, file, line, col)
             SELECT ?, id, ?, ? FROM files
             WHERE path = ?;
     `)
     if err != nil {
         return nil, err
     }
-    r.insertFunc = insertFunc
 
-    selectFunc, err := db.Prepare(`
-        SELECT name, path, line, col FROM func_defs, files
+    r.selectSymb, err = db.Prepare(`
+        SELECT name, path, line, col FROM symbol_decls, files
         WHERE name = ? AND id = file;
     `)
     if err != nil {
         return nil, err
     }
-    r.selectFunc = selectFunc
 
-    delFileRef, err := db.Prepare(`
+    r.delFileRef, err = db.Prepare(`
         DELETE FROM files WHERE path = ?;
     `)
-    r.delFileRef = delFileRef
+    if err != nil {
+        return nil, err
+    }
 
     return r, nil
 }
 
-func (db *SymbolsDB) InsertFile(path string) error {
-    // TODO: calculate sha1
-    _, err := db.insertFile.Exec(path, nil)
+func (db *SymbolsDB) InsertSymbol(sym *Symbol) error {
+    _, err := db.insertSymb.Exec(sym.name, sym.line, sym.col, sym.file)
     if err != nil {
         return err
     }
@@ -131,40 +161,76 @@ func (db *SymbolsDB) InsertFile(path string) error {
     return nil
 }
 
-func (db *SymbolsDB) InsertFunction(fun *Function) error {
-    _, err := db.insertFunc.Exec(fun.name, fun.line, fun.col, fun.file)
-    if err != nil {
-        return err
-    }
+func (db *SymbolsDB) GetSymbols(name string) ([]*Symbol, error) {
+    rs := make([]*Symbol, 0)
 
-    return nil
-}
-
-func (db *SymbolsDB) GetFunctions(name string) ([]*Function, error) {
-    rs := make([]*Function, 0)
-
-    r, err := db.selectFunc.Query(name)
+    r, err := db.selectSymb.Query(name)
     if err != nil {
         return nil, err
     }
 
     for r.Next() {
-        f := new(Function)
+        s := new(Symbol)
 
-        err = r.Scan(&f.name, &f.file, &f.line, &f.col)
+        err = r.Scan(&s.name, &s.file, &s.line, &s.col)
         if err != nil {
             return nil, err
         }
 
-        rs = append(rs, f)
+        rs = append(rs, s)
     }
 
     return rs, nil
 }
 
-func (db *SymbolsDB) CheckUpToDate(file string) bool {
-    //TODO: check if this file exist and is up to date. If not, return false.
-    return false
+func calculateSha1(file string) ([]byte, error) {
+    f, err := os.Open(file)
+    if err != nil {
+        return nil, err
+    }
+    defer f.Close()
+
+    hash := sha1.New()
+    _, err = io.Copy(hash, f)
+    if err != nil {
+        return nil, err
+    }
+
+    return hash.Sum(nil), nil
+}
+/*
+ * This function checks if the file exist and it is up to date. If it is not
+ * not up to date, it will remove the current references of the file in the DB.
+ * In either case, it will insert a new file entry in the DB and the Parser
+ * should be called to populate the DB with the new symbols.
+ */
+func (db *SymbolsDB) NeedToProcessFile(file string) bool {
+    // TODO: This is paifully slow. We should make use of mtime as git does.
+    // Check out:
+    //  http://www-cs-students.stanford.edu/~blynn/gg/race.html
+    //  https://www.kernel.org/pub/software/scm/git/docs/technical/racy-git.txt
+    hash, _ := calculateSha1(file)
+
+    r, _ := db.selectFileHash.Query(file)
+    if r.Next() {
+        var inDbHash []byte
+        r.Scan(&inDbHash)
+        log.Printf("%x = %x\n", hash, inDbHash)
+        if bytes.Compare(hash, inDbHash) == 0 {
+            // the hash in the DB and the file are the same; nothing to process.
+            return false
+        } else {
+            // not up to date, remove all references
+            db.RemoveFileReferences(file)
+        }
+    }
+
+    _, err := db.insertFile.Exec(file, hash)
+    if err != nil {
+        return false
+    }
+
+    return true
 }
 
 func (db *SymbolsDB) RemoveFileReferences(file string) error {

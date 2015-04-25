@@ -31,11 +31,7 @@ func processFile(files chan string, db *SymbolsDB) {
     for {
         file := <-files
         log.Println("exploring", file)
-        if !db.CheckUpToDate(file) {
-            /* if it is not up to date, we need to remove all the references
-             * to the old file and start over.
-             */
-            db.RemoveFileReferences(file)
+        if db.NeedToProcessFile(file) {
             Parse(file, db)
         }
     }
