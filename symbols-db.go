@@ -50,7 +50,7 @@ type SymbolsDB struct {
 
 func (db *SymbolsDB) empty() bool {
     rows, err := db.db.Query(`SELECT name FROM sqlite_master
-                            WHERE type='table' AND name='files'`)
+                            WHERE type='table' AND name='files';`)
     if err != nil {
         log.Fatal(err)
     }
@@ -241,3 +241,22 @@ func (db *SymbolsDB) RemoveFileReferences(file string) error {
 
     return nil
 }
+
+func (db *SymbolsDB) GetSetFilesInDB() map[string]bool {
+    rows, err := db.db.Query(`SELECT path FROM files;`)
+    if err != nil {
+        return nil
+    }
+
+    fileSet := map[string]bool{}
+    for rows.Next() {
+        var path string
+        rows.Scan(&path)
+
+        fileSet[path] = true
+    }
+
+    return fileSet
+}
+
+// TODO: we need to close all the opened connections to the DB

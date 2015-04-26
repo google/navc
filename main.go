@@ -23,13 +23,26 @@ import (
     "os"
     "regexp"
     fsnotify "gopkg.in/fsnotify.v1"
+    "sync"
 )
 
-//TODO: How are we handling removed files?
+func processFile(files chan string, wg *sync.WaitGroup, dbFile string) {
+    defer wg.Done()
 
-func processFile(files chan string, db *SymbolsDB) {
+    // open databased of symbols for thread
+    db, err := OpenSymbolsDB(dbFile)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // start exploring files
     for {
-        file := <-files
+        file, ok := <-files
+
+        if !ok {
+            return
+        }
+
         log.Println("exploring", file)
         if db.NeedToProcessFile(file) {
             Parse(file, db)
@@ -114,25 +127,34 @@ func main() {
     }
 
     // start threads to process files
+    var wg sync.WaitGroup
     files := make(chan string, nIndexingThreads)
+    wg.Add(nIndexingThreads)
     for i := 0; i < nIndexingThreads; i++ {
-        go processFile(files, db)
+        go processFile(files, &wg, dbFile)
     }
 
     // explore all the directories in indexDir and process all files
+    removedFilesSet := db.GetSetFilesInDB()
     watcher, _ := fsnotify.NewWatcher()
     visitorDir := func(path string) {
         // add watcher to directory
         watcher.Add(path)
     }
     visitorC := func(path string) {
-        // put file in channel
-        files <- path
-        // TODO: update set to know what files to remove
+        // update set of removed files
+        delete(removedFilesSet, path)
         // add watcher
         watcher.Add(path)
+        // put file in channel
+        files <- path
     }
     exploreDirsToIndex(indexDir, visitorDir, visitorC)
+
+    // remove from DB deleted files
+    for path := range removedFilesSet {
+        db.RemoveFileReferences(path)
+    }
 
     /*
     TODO: working example of fsnotify
@@ -153,7 +175,7 @@ func main() {
     }
     */
 
-    // TODO: wait for threads to finish
-    done := make(chan int)
-    <-done
+    // wait for threads to finish
+    close(files)
+    wg.Wait()
 }
