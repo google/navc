@@ -34,6 +34,7 @@ func processFile(files chan string, wg *sync.WaitGroup, dbFile string) {
     if err != nil {
         log.Fatal(err)
     }
+    defer db.Close()
 
     // start exploring files
     for {
@@ -125,6 +126,7 @@ func main() {
     if err != nil {
         log.Fatal(err)
     }
+    defer db.Close()
 
     // start threads to process files
     var wg sync.WaitGroup

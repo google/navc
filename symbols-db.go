@@ -37,7 +37,6 @@ type Symbol struct {
     col     int
 }
 
-//TODO: we need destructors to close all statements and open DB
 type SymbolsDB struct {
     db              *sql.DB
 
@@ -54,6 +53,7 @@ func (db *SymbolsDB) empty() bool {
     if err != nil {
         log.Fatal(err)
     }
+    defer rows.Close()
 
     return !rows.Next()
 }
@@ -168,6 +168,7 @@ func (db *SymbolsDB) GetSymbols(name string) ([]*Symbol, error) {
     if err != nil {
         return nil, err
     }
+    defer r.Close()
 
     for r.Next() {
         s := new(Symbol)
@@ -211,11 +212,15 @@ func (db *SymbolsDB) NeedToProcessFile(file string) bool {
     //  https://www.kernel.org/pub/software/scm/git/docs/technical/racy-git.txt
     hash, _ := calculateSha1(file)
 
-    r, _ := db.selectFileHash.Query(file)
+    r, err := db.selectFileHash.Query(file)
+    if err != nil {
+        log.Fatal("select hash ",file)
+    }
+    defer r.Close()
+
     if r.Next() {
         var inDbHash []byte
         r.Scan(&inDbHash)
-        log.Printf("%x = %x\n", hash, inDbHash)
         if bytes.Compare(hash, inDbHash) == 0 {
             // the hash in the DB and the file are the same; nothing to process.
             return false
@@ -225,9 +230,9 @@ func (db *SymbolsDB) NeedToProcessFile(file string) bool {
         }
     }
 
-    _, err := db.insertFile.Exec(file, hash)
+    _, err = db.insertFile.Exec(file, hash)
     if err != nil {
-        return false
+        log.Fatal("inserting ",file,err)
     }
 
     return true
@@ -247,6 +252,7 @@ func (db *SymbolsDB) GetSetFilesInDB() map[string]bool {
     if err != nil {
         return nil
     }
+    defer rows.Close()
 
     fileSet := map[string]bool{}
     for rows.Next() {
@@ -259,4 +265,11 @@ func (db *SymbolsDB) GetSetFilesInDB() map[string]bool {
     return fileSet
 }
 
-// TODO: we need to close all the opened connections to the DB
+func (db *SymbolsDB) Close() {
+    db.insertFile.Close()
+    db.selectFileHash.Close()
+    db.insertSymb.Close()
+    db.selectSymb.Close()
+    db.delFileRef.Close()
+    db.db.Close()
+}
