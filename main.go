@@ -26,15 +26,8 @@ import (
     "sync"
 )
 
-func processFile(files chan string, wg *sync.WaitGroup, dbFile string) {
+func processFile(files chan string, wg *sync.WaitGroup, db *SymbolsDB) {
     defer wg.Done()
-
-    // open databased of symbols for thread
-    db, err := OpenSymbolsDB(dbFile)
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer db.Close()
 
     // start exploring files
     for {
@@ -122,10 +115,7 @@ func main() {
     }
 
     // open databased of symbols
-    db, err := OpenSymbolsDB(dbFile)
-    if err != nil {
-        log.Fatal(err)
-    }
+    db := OpenSymbolsDB(dbFile)
     defer db.Close()
 
     // start threads to process files
@@ -133,7 +123,7 @@ func main() {
     files := make(chan string, nIndexingThreads)
     wg.Add(nIndexingThreads)
     for i := 0; i < nIndexingThreads; i++ {
-        go processFile(files, &wg, dbFile)
+        go processFile(files, &wg, db)
     }
 
     // explore all the directories in indexDir and process all files

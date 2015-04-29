@@ -51,7 +51,7 @@ func (db *SymbolsDB) empty() bool {
     rows, err := db.db.Query(`SELECT name FROM sqlite_master
                             WHERE type='table' AND name='files';`)
     if err != nil {
-        log.Fatal(err)
+        log.Fatal("check empty ", err)
     }
     defer rows.Close()
 
@@ -93,14 +93,14 @@ func (db *SymbolsDB) initDB() {
     `
     _, err := db.db.Exec(initStmt)
     if err != nil {
-        log.Fatal("init", err)
+        log.Fatal("init db ", err)
     }
 }
 
-func OpenSymbolsDB(path string) (*SymbolsDB, error) {
+func OpenSymbolsDB(path string) *SymbolsDB {
     db, err := sql.Open("sqlite3", path)
     if err != nil {
-        return nil, err
+        log.Fatal("open db ", err)
     }
 
     r := &SymbolsDB{db: db}
@@ -115,14 +115,14 @@ func OpenSymbolsDB(path string) (*SymbolsDB, error) {
         INSERT INTO files(path, hash) VALUES (?, ?);
     `)
     if err != nil {
-        return nil, err
+        log.Fatal("prepare insert files ", err)
     }
 
     r.selectFileHash, err = db.Prepare(`
         SELECT hash FROM files WHERE path = ?;
     `)
     if err != nil {
-        return nil, err
+        log.Fatal("prepare select hash ", err)
     }
 
     r.insertSymb, err = db.Prepare(`
@@ -131,7 +131,7 @@ func OpenSymbolsDB(path string) (*SymbolsDB, error) {
             WHERE path = ?;
     `)
     if err != nil {
-        return nil, err
+        log.Fatal("prepare insert symbol ", err)
     }
 
     r.selectSymb, err = db.Prepare(`
@@ -139,49 +139,46 @@ func OpenSymbolsDB(path string) (*SymbolsDB, error) {
         WHERE name = ? AND id = file;
     `)
     if err != nil {
-        return nil, err
+        log.Fatal("prepare select symbol ", err)
     }
 
     r.delFileRef, err = db.Prepare(`
         DELETE FROM files WHERE path = ?;
     `)
     if err != nil {
-        return nil, err
+        log.Fatal("prepare delete file ", err)
     }
 
-    return r, nil
+    return r
 }
 
-func (db *SymbolsDB) InsertSymbol(sym *Symbol) error {
+func (db *SymbolsDB) InsertSymbol(sym *Symbol) {
     _, err := db.insertSymb.Exec(sym.name, sym.line, sym.col, sym.file)
     if err != nil {
-        return err
+        log.Fatal("insert symbol ", err)
     }
-
-    return nil
 }
 
-func (db *SymbolsDB) GetSymbols(name string) ([]*Symbol, error) {
-    rs := make([]*Symbol, 0)
-
+func (db *SymbolsDB) GetSymbols(name string) []*Symbol {
     r, err := db.selectSymb.Query(name)
     if err != nil {
-        return nil, err
+        log.Fatal("select symbol ", err)
     }
     defer r.Close()
 
+    rs := make([]*Symbol, 0)
     for r.Next() {
         s := new(Symbol)
 
         err = r.Scan(&s.name, &s.file, &s.line, &s.col)
         if err != nil {
-            return nil, err
+            log.Fatal("scan symbol ", err)
         }
 
         rs = append(rs, s)
     }
 
-    return rs, nil
+    return rs
 }
 
 func calculateSha1(file string) ([]byte, error) {
@@ -199,6 +196,7 @@ func calculateSha1(file string) ([]byte, error) {
 
     return hash.Sum(nil), nil
 }
+
 /*
  * This function checks if the file exist and it is up to date. If it is not
  * not up to date, it will remove the current references of the file in the DB.
@@ -206,21 +204,31 @@ func calculateSha1(file string) ([]byte, error) {
  * should be called to populate the DB with the new symbols.
  */
 func (db *SymbolsDB) NeedToProcessFile(file string) bool {
-    // TODO: This is paifully slow. We should make use of mtime as git does.
+    // TODO: This can be paifully slow. Check if this is the case. If so, We
+    // should make use of mtime as git does.
     // Check out:
     //  http://www-cs-students.stanford.edu/~blynn/gg/race.html
     //  https://www.kernel.org/pub/software/scm/git/docs/technical/racy-git.txt
-    hash, _ := calculateSha1(file)
+    hash, err := calculateSha1(file)
+    if err != nil {
+        log.Println(err, ": unable to read file ", file)
+        return false
+    }
 
     r, err := db.selectFileHash.Query(file)
     if err != nil {
-        log.Fatal("select hash ",file)
+        log.Fatal("select file hash ", err)
     }
     defer r.Close()
 
     if r.Next() {
         var inDbHash []byte
-        r.Scan(&inDbHash)
+
+        err := r.Scan(&inDbHash)
+        if err != nil {
+            log.Fatal("scanning hash ", err)
+        }
+
         if bytes.Compare(hash, inDbHash) == 0 {
             // the hash in the DB and the file are the same; nothing to process.
             return false
@@ -232,32 +240,34 @@ func (db *SymbolsDB) NeedToProcessFile(file string) bool {
 
     _, err = db.insertFile.Exec(file, hash)
     if err != nil {
-        log.Fatal("inserting ",file,err)
+        log.Fatal("insert file ", err)
     }
 
     return true
 }
 
-func (db *SymbolsDB) RemoveFileReferences(file string) error {
+func (db *SymbolsDB) RemoveFileReferences(file string) {
     _, err := db.delFileRef.Exec(file)
     if err != nil {
-        return err
+        log.Fatal("delete file ", err)
     }
-
-    return nil
 }
 
 func (db *SymbolsDB) GetSetFilesInDB() map[string]bool {
     rows, err := db.db.Query(`SELECT path FROM files;`)
     if err != nil {
-        return nil
+        log.Fatal("select files ", err)
     }
     defer rows.Close()
 
     fileSet := map[string]bool{}
     for rows.Next() {
         var path string
-        rows.Scan(&path)
+
+        err := rows.Scan(&path)
+        if err != nil {
+            log.Fatal("scan path ", err)
+        }
 
         fileSet[path] = true
     }
