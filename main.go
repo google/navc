@@ -45,7 +45,7 @@ func processFile(files chan string, wg *sync.WaitGroup, db *SymbolsDB) {
 
 func explorePathToParse(path string,
                         visitDir func(string),
-                        visitC func(string)) error {
+                        visitC func(string)) {
     path = filepath.Clean(path)
     toExplore := []string{path}
     for len(toExplore) > 0 {
@@ -55,12 +55,14 @@ func explorePathToParse(path string,
 
         f, err := os.Open(path)
         if err != nil {
-            return err
+            log.Println(err, " opening ", path, ", ignoring")
+            continue
         }
 
         info, err := f.Stat()
         if err != nil {
-            return err
+            log.Println(err, " stating ", path, ", ignoring")
+            continue
         }
 
         // visit file
@@ -78,7 +80,8 @@ func explorePathToParse(path string,
         // add all the files in the directory to explore
         dirFiles, err := f.Readdir(0)
         if err != nil {
-            return err
+            log.Println(err, " readdir ", path, ", ignoring")
+            continue
         }
 
         for _, subf := range dirFiles {
@@ -93,8 +96,6 @@ func explorePathToParse(path string,
             toExplore = append(toExplore, relPath)
         }
     }
-
-    return nil
 }
 
 func handleChange(event fsnotify.Event,
