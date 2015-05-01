@@ -24,6 +24,7 @@ import (
     "regexp"
     fsnotify "gopkg.in/fsnotify.v1"
     "sync"
+    "path/filepath"
 )
 
 func processFile(files chan string, wg *sync.WaitGroup, db *SymbolsDB) {
@@ -33,9 +34,7 @@ func processFile(files chan string, wg *sync.WaitGroup, db *SymbolsDB) {
     for {
         file, ok := <-files
 
-        if !ok {
-            return
-        }
+        if !ok { return }
 
         log.Println("exploring", file)
         if db.NeedToProcessFile(file) {
@@ -44,8 +43,11 @@ func processFile(files chan string, wg *sync.WaitGroup, db *SymbolsDB) {
     }
 }
 
-func exploreDirsToIndex(toExplore []string, visitDir func(string),
+func explorePathToParse(path string,
+                        visitDir func(string),
                         visitC func(string)) error {
+    path = filepath.Clean(path)
+    toExplore := []string{path}
     for len(toExplore) > 0 {
         // dequeue first path
         path := toExplore[0]
@@ -86,12 +88,38 @@ func exploreDirsToIndex(toExplore []string, visitDir func(string),
             }
 
             relPath := path + "/" + subf.Name()
+            relPath = filepath.Clean(relPath)
 
             toExplore = append(toExplore, relPath)
         }
     }
 
     return nil
+}
+
+func handleChange(event fsnotify.Event,
+                  db *SymbolsDB,
+                  watcher *fsnotify.Watcher,
+                  files chan string)  {
+
+    visitorDir := func(path string) {
+        // add watcher to directory
+        watcher.Add(path)
+    }
+    visitorC := func(path string) {
+        // add watcher
+        watcher.Add(path)
+        // put file in channel
+        files <- path
+    }
+
+    switch {
+    case event.Op & (fsnotify.Write | fsnotify.Create | fsnotify.Chmod) != 0:
+        explorePathToParse(event.Name, visitorDir, visitorC)
+    case event.Op & (fsnotify.Remove | fsnotify.Rename) != 0:
+        watcher.Remove(event.Name)
+        db.RemoveFileReferences(event.Name)
+    }
 }
 
 func main() {
@@ -126,9 +154,28 @@ func main() {
         go processFile(files, &wg, db)
     }
 
-    // explore all the directories in indexDir and process all files
-    removedFilesSet := db.GetSetFilesInDB()
+    // start file watcher
     watcher, _ := fsnotify.NewWatcher()
+    wg.Add(1)
+    go func() {
+        defer wg.Done()
+        for {
+            select {
+            case event, ok := <-watcher.Events:
+                if !ok { return }
+                handleChange(event, db, watcher, files)
+
+                log.Println("event ", event, event.Name)
+            case err, ok := <-watcher.Errors:
+                if !ok { return }
+
+                log.Println("watcher error: ", err)
+            }
+        }
+    }()
+
+    // explore all the paths in indexDir and process all files
+    removedFilesSet := db.GetSetFilesInDB()
     visitorDir := func(path string) {
         // add watcher to directory
         watcher.Add(path)
@@ -141,24 +188,14 @@ func main() {
         // put file in channel
         files <- path
     }
-    exploreDirsToIndex(indexDir, visitorDir, visitorC)
+    for _, path := range indexDir {
+        explorePathToParse(path, visitorDir, visitorC)
+    }
 
     // remove from DB deleted files
     for path := range removedFilesSet {
         db.RemoveFileReferences(path)
     }
-
-    /*
-    TODO: working example of fsnotify
-    go func() {
-        for {
-            select {
-                case event := <-watcher.Events:
-                log.Println("event", event, event.Name)
-            }
-        }
-    }()
-    */
 
     /*
     funs, _ := db.GetFunctions("main")
@@ -168,6 +205,7 @@ func main() {
     */
 
     // wait for threads to finish
+    watcher.Close()
     close(files)
     wg.Wait()
 }
