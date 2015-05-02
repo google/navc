@@ -25,6 +25,9 @@ import (
     fsnotify "gopkg.in/fsnotify.v1"
     "sync"
     "path/filepath"
+    "net"
+    "net/rpc"
+    "net/rpc/jsonrpc"
 )
 
 func processFile(files chan string, wg *sync.WaitGroup, db *SymbolsDB) {
@@ -126,14 +129,17 @@ func handleChange(event fsnotify.Event,
 func main() {
     // path to symbols DB
     var dbFile string
-    flag.StringVar(&dbFile, "db", ".dbsymbols", "Path to symbols path")
+    flag.StringVar(&dbFile, "db", ".navc_dbsymbols", "Path to symbols path")
 
     // number of parallel indexing threads
     var nIndexingThreads int
-    flag.IntVar(&nIndexingThreads, "numThread", runtime.NumCPU(),
-                "Number of threads indexing")
+    flag.IntVar(&nIndexingThreads, "numThreads", runtime.NumCPU(),
+                "Number of indexing threads")
 
     flag.Parse()
+
+    // socket file for communication with daemon
+    socketFile := ".navc_socket"
 
     // list of directores with source to index
     var indexDir []string
@@ -198,14 +204,39 @@ func main() {
         db.RemoveFileReferences(path)
     }
 
-    /*
-    funs, _ := db.GetFunctions("main")
-    for _, f := range funs {
-        log.Println(f)
+    // start serving requests
+    lis, err := net.Listen("unix", socketFile)
+    if err != nil {
+        log.Println("creating socket file ", err)
+        return
     }
-    */
+    defer os.Remove(socketFile)
+    handler := rpc.NewServer()
+    handler.Register(&RequestHandler{db})
+    wg.Add(1)
+    go func() {
+        defer wg.Done()
+        for {
+            conn, err := lis.Accept()
+            if err != nil {
+                log.Println("accepting connection: ", err, "breaking")
+                return
+            }
+
+            codec := jsonrpc.NewServerCodec(conn)
+            err = handler.ServeRequest(codec)
+            if err != nil {
+                log.Println("handling request: ", err, ", ignoring")
+                continue
+            }
+            codec.Close()
+        }
+    }()
+
+    // TODO: handle ctl-c event here for more graceful termination
 
     // wait for threads to finish
+    lis.Close()
     watcher.Close()
     close(files)
     wg.Wait()
