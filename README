@@ -8,3 +8,6 @@ declaration or definition being looked up. The project is limited to C for now,
 but it can be extended to C++ as clang it is able to parse it.
 
 navc is in its early stages. There is still plenty of code to be written.
+
+DISCLAIMER: This is not a official Google project and it is not supported
+by Google Inc.
