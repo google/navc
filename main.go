@@ -139,7 +139,7 @@ func main() {
     flag.Parse()
 
     // socket file for communication with daemon
-    socketFile := ".navc_socket"
+    socketFile := "/tmp/navc.sock"
 
     // list of directores with source to index
     var indexDir []string
@@ -207,8 +207,7 @@ func main() {
     // start serving requests
     lis, err := net.Listen("unix", socketFile)
     if err != nil {
-        log.Println("creating socket file ", err)
-        return
+        log.Fatal("error opening socket", err)
     }
     defer os.Remove(socketFile)
     handler := rpc.NewServer()
@@ -219,14 +218,14 @@ func main() {
         for {
             conn, err := lis.Accept()
             if err != nil {
-                log.Println("accepting connection: ", err, "breaking")
+                log.Println("accepting connection:", err, "breaking")
                 return
             }
 
             codec := jsonrpc.NewServerCodec(conn)
             err = handler.ServeRequest(codec)
             if err != nil {
-                log.Println("handling request: ", err, ", ignoring")
+                log.Println("handling request:", err, ", ignoring")
                 continue
             }
             codec.Close()
@@ -234,6 +233,7 @@ func main() {
     }()
 
     // TODO: handle ctl-c event here for more graceful termination
+    select {}
 
     // wait for threads to finish
     lis.Close()
