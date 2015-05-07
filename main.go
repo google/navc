@@ -21,6 +21,7 @@ import (
     "flag"
     "runtime"
     "os"
+    "os/signal"
     "regexp"
     fsnotify "gopkg.in/fsnotify.v1"
     "sync"
@@ -149,13 +150,22 @@ func main() {
         indexDir = []string{"."}
     }
 
+    // handle interrup and kill signals
+    intr := make(chan os.Signal, 1)
+    signal.Notify(intr, os.Interrupt, os.Kill)
+
+    // start threads to process files
+    var wg sync.WaitGroup
+    defer wg.Wait()
+
     // open databased of symbols
     db := OpenSymbolsDB(dbFile)
     defer db.Close()
 
-    // start threads to process files
-    var wg sync.WaitGroup
+    // start indexing threads
     files := make(chan string, nIndexingThreads)
+    defer close(files)
+
     wg.Add(nIndexingThreads)
     for i := 0; i < nIndexingThreads; i++ {
         go processFile(files, &wg, db)
@@ -163,6 +173,7 @@ func main() {
 
     // start file watcher
     watcher, _ := fsnotify.NewWatcher()
+    defer watcher.Close()
     wg.Add(1)
     go func() {
         defer wg.Done()
@@ -207,9 +218,12 @@ func main() {
     // start serving requests
     lis, err := net.Listen("unix", socketFile)
     if err != nil {
-        log.Fatal("error opening socket", err)
+        log.Println("error opening socket", err)
+        return
     }
     defer os.Remove(socketFile)
+    defer lis.Close()
+
     handler := rpc.NewServer()
     handler.Register(&RequestHandler{db})
     wg.Add(1)
@@ -218,26 +232,21 @@ func main() {
         for {
             conn, err := lis.Accept()
             if err != nil {
-                log.Println("accepting connection:", err, "breaking")
+                log.Println("accepting connection (breaking):", err)
                 return
             }
 
             codec := jsonrpc.NewServerCodec(conn)
             err = handler.ServeRequest(codec)
             if err != nil {
-                log.Println("handling request:", err, ", ignoring")
-                continue
+                log.Println("handling request (ignoring):", err)
             }
             codec.Close()
         }
     }()
 
-    // TODO: handle ctl-c event here for more graceful termination
-    select {}
-
-    // wait for threads to finish
-    lis.Close()
-    watcher.Close()
-    close(files)
-    wg.Wait()
+    // wait until ctl-c is pressed
+    select {
+    case <-intr:
+    }
 }
