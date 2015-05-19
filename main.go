@@ -137,6 +137,10 @@ func main() {
     flag.IntVar(&nIndexingThreads, "numThreads", runtime.NumCPU(),
                 "Number of indexing threads")
 
+    // reset DB
+    var resetDb bool
+    flag.BoolVar(&resetDb, "resetDb", false, "Reset symbols DB and start over")
+
     flag.Parse()
 
     // socket file for communication with daemon
@@ -154,9 +158,14 @@ func main() {
     intr := make(chan os.Signal, 1)
     signal.Notify(intr, os.Interrupt, os.Kill)
 
-    // start threads to process files
     var wg sync.WaitGroup
     defer wg.Wait()
+
+    // if we need to reset the database, erase the old one
+    if resetDb {
+        os.Remove(dbFile)
+
+    }
 
     // open databased of symbols
     db := OpenSymbolsDB(dbFile)
@@ -166,6 +175,7 @@ func main() {
     files := make(chan string, nIndexingThreads)
     defer close(files)
 
+    // start threads to process files
     wg.Add(nIndexingThreads)
     for i := 0; i < nIndexingThreads; i++ {
         go processFile(files, &wg, db)

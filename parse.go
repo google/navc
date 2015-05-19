@@ -88,13 +88,21 @@ func Parse(file string, db *SymbolsDB) {
 
         switch cursor.Kind() {
         case clang.CK_FunctionDecl:
-            fun := &Symbol{cursor.Spelling(), fName, int(line), int(col)}
-            db.InsertSymbol(fun)
-            // TODO: check if this is the function definition too
+            dec := &Symbol{cursor.Spelling(), fName, int(line), int(col)}
 
-            return clang.CVR_Recurse
+            if cursor.IsDefinition() {
+                db.InsertFuncDef(dec)
+
+                return clang.CVR_Recurse
+            } else {
+                defCursor := cursor.DefinitionCursor()
+                f, line, col, _ := defCursor.Location().GetFileLocation()
+                fName := f.Name()
+                def := &Symbol{defCursor.Spelling(), fName, int(line), int(col)}
+
+                db.InsertFuncSymb(dec, def)
+            }
         case clang.CK_InclusionDirective:
-            return clang.CVR_Continue
         }
         return clang.CVR_Continue
     }

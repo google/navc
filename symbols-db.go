@@ -295,6 +295,17 @@ func (db *SymbolsDB) GetSetFilesInDB() map[string]bool {
     return fileSet
 }
 
+func (db *SymbolsDB) InsertFuncDef(def *Symbol) {
+    /* TODO: insert function definition. Ignore if already exists. */
+}
+
+func (db *SymbolsDB) InsertFuncSymb(dec, def *Symbol) {
+    /* insert the definition first, ignoring if already exists */
+    db.InsertFuncDef(def)
+
+    /* TODO: insert symbol declaration pointint to definition */
+}
+
 func (db *SymbolsDB) Close() {
     db.insertFile.Close()
     db.selectFileInfo.Close()
