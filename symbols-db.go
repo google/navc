@@ -37,13 +37,15 @@ type Symbol struct {
 }
 
 type SymbolsDB struct {
-    db              *sql.DB
+    db                  *sql.DB
 
-    insertFile      *sql.Stmt
-    selectFileInfo  *sql.Stmt
-    insertSymb      *sql.Stmt
-    selectSymb      *sql.Stmt
-    delFileRef      *sql.Stmt
+    insertFile          *sql.Stmt
+    selectFileInfo      *sql.Stmt
+    insertSymb          *sql.Stmt
+    selectSymb          *sql.Stmt
+    delFileRef          *sql.Stmt
+    insertFuncDef       *sql.Stmt
+    insertFuncDecDef    *sql.Stmt
 }
 
 func (db *SymbolsDB) empty() bool {
@@ -70,24 +72,38 @@ func (db *SymbolsDB) initDB() {
             file    INTEGER,
             line    INTEGER,
             col     INTEGER,
+
             PRIMARY KEY(name, file, line, col),
             FOREIGN KEY(file) REFERENCES files(id) ON DELETE CASCADE
         );
         CREATE TABLE func_defs (
+            name    TEXT,
+            file    INTEGER,
+            line    INTEGER,
+            col     INTEGER,
+
+            PRIMARY KEY(name, file, line, col),
+            FOREIGN KEY(file) REFERENCES files(id) ON DELETE CASCADE
+        );
+        CREATE TABLE func_decs_defs (
             name        TEXT,
-            file        INTEGER,
-            line        INTEGER,
-            col         INTEGER,
+
+            dec_file    INTEGER,
+            dec_line    INTEGER,
+            dec_col     INTEGER,
 
             def_file    INTEGER,
             def_line    INTEGER,
             def_col     INTEGER,
 
-            PRIMARY KEY(name, file, line, col),
-            FOREIGN KEY(file) REFERENCES files(id) ON DELETE CASCADE,
+            PRIMARY KEY(name,
+                dec_file, dec_line, dec_col,
+                def_file, dec_line, dec_col)
 
-            FOREIGN KEY(name, def_file, def_line, def_col)
+            FOREIGN KEY(name, dec_file, dec_line, dec_col)
                 REFERENCES symbol_decls(name, file, line, col) ON DELETE CASCADE
+            FOREIGN KEY(name, def_file, def_line, def_col)
+                REFERENCES func_defs(name, file, line, col) ON DELETE CASCADE
         );
     `
     _, err := db.db.Exec(initStmt)
@@ -125,7 +141,7 @@ func OpenSymbolsDB(path string) *SymbolsDB {
     }
 
     r.insertSymb, err = db.Prepare(`
-        INSERT INTO symbol_decls(name, file, line, col)
+        INSERT OR IGNORE INTO symbol_decls(name, file, line, col)
             SELECT ?, id, ?, ? FROM files
             WHERE path = ?;
     `)
@@ -146,6 +162,24 @@ func OpenSymbolsDB(path string) *SymbolsDB {
     `)
     if err != nil {
         log.Fatal("prepare delete file ", err)
+    }
+
+    r.insertFuncDef, err = db.Prepare(`
+        INSERT OR IGNORE INTO func_defs(name, file, line, col)
+            SELECT ?, id, ?, ? FROM files
+            WHERE path = ?;
+    `)
+    if err != nil {
+        log.Fatal("prepare insert func def ", err)
+    }
+
+    r.insertFuncDecDef, err = db.Prepare(`
+        INSERT INTO func_decs_defs
+            SELECT ?, f1.id, ?, ?, f2.id, ?, ? FROM files f1, files f2
+            WHERE f1.path = ? AND f2.path = ?;
+    `)
+    if err != nil {
+        log.Fatal("prepare insert func dec/def ", err)
     }
 
     return r
@@ -193,7 +227,7 @@ func getFileInfoBytes(fi os.FileInfo) []byte {
         dir = 0
     }
 
-    var data = []interface{}{
+    data := []interface{}{
         fi.Size(),
         fi.Mode(),
         timeBytes,
@@ -258,6 +292,11 @@ func (db *SymbolsDB) NeedToProcessFile(file string) bool {
         }
     }
 
+    /* TODO: fix race here! If two threads discover the same file at the
+     * same time this will hit a UNIQUE constraint violated. This could
+     * happen if a .c file includes a .h file and they are both explored
+     * at the same time. */
+
     _, err = db.insertFile.Exec(file, fiBytes)
     if err != nil {
         log.Fatal("insert file ", err)
@@ -296,14 +335,30 @@ func (db *SymbolsDB) GetSetFilesInDB() map[string]bool {
 }
 
 func (db *SymbolsDB) InsertFuncDef(def *Symbol) {
-    /* TODO: insert function definition. Ignore if already exists. */
+    /* insert function definition. Ignore if already exists. */
+    _, err := db.insertFuncDef.Exec(def.name, def.line, def.col, def.file)
+    if err != nil {
+        log.Fatal("insert func def ", err)
+    }
 }
 
 func (db *SymbolsDB) InsertFuncSymb(dec, def *Symbol) {
-    /* insert the definition first, ignoring if already exists */
-    db.InsertFuncDef(def)
+    db.db.Query(`BEGIN TRANSACTION;`)
 
-    /* TODO: insert symbol declaration pointint to definition */
+    db.InsertFuncDef(def)
+    db.InsertSymbol(dec)
+
+    /* point this declaration to its definition */
+    _, err := db.insertFuncDecDef.Exec(
+        dec.name,
+        dec.line, dec.col,
+        def.line, def.col,
+        dec.file, def.file)
+    if err != nil {
+        log.Fatal("insert func dec to def ", err)
+    }
+
+    db.db.Query(`COMMIT TRANSACTION;`)
 }
 
 func (db *SymbolsDB) Close() {
@@ -312,5 +367,7 @@ func (db *SymbolsDB) Close() {
     db.insertSymb.Close()
     db.selectSymb.Close()
     db.delFileRef.Close()
+    db.insertFuncDef.Close()
+    db.insertFuncDecDef.Close()
     db.db.Close()
 }

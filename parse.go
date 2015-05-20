@@ -96,11 +96,15 @@ func Parse(file string, db *SymbolsDB) {
                 return clang.CVR_Recurse
             } else {
                 defCursor := cursor.DefinitionCursor()
-                f, line, col, _ := defCursor.Location().GetFileLocation()
-                fName := f.Name()
-                def := &Symbol{defCursor.Spelling(), fName, int(line), int(col)}
+                if !defCursor.IsNull() {
+                    f, line, col, _ := defCursor.Location().GetFileLocation()
+                    fName := f.Name()
+                    def := &Symbol{defCursor.Spelling(), fName, int(line), int(col)}
 
-                db.InsertFuncSymb(dec, def)
+                    db.InsertFuncSymb(dec, def)
+                } else {
+                    db.InsertSymbol(dec)
+                }
             }
         case clang.CK_InclusionDirective:
         }

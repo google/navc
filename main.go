@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+/* TODO: we need to standarize the code on the comments. Currently, we have
+ * a mix of comments syntax.
+ */
+
 package main
 
 import (
