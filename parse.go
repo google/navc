@@ -51,6 +51,12 @@ import (
     "github.com/sbinet/go-clang"
 )
 
+func getSymbolFromCursor(cursor *clang.Cursor) *Symbol {
+    f, line, col, _ := cursor.Location().GetFileLocation()
+    fName := f.Name()
+    return &Symbol{cursor.Spelling(), fName, int(line), int(col)}
+}
+
 func Parse(file string, db *SymbolsDB) {
     // files already inserted in the DB from this parsing
     insertedFiles := map[string]bool{ file: true }
@@ -77,9 +83,11 @@ func Parse(file string, db *SymbolsDB) {
             return clang.CVR_Continue
         }
 
+        /* TODO: erase! this is not required */
         fmt.Printf("%s: %s (%s)\n",
             cursor.Kind().Spelling(), cursor.Spelling(), cursor.USR())
         fmt.Println(fName, ":", line, col)
+        /*******************/
 
         if !insertedFiles[fName] {
             db.NeedToProcessFile(fName)
@@ -88,27 +96,36 @@ func Parse(file string, db *SymbolsDB) {
 
         switch cursor.Kind() {
         case clang.CK_FunctionDecl:
-            dec := &Symbol{cursor.Spelling(), fName, int(line), int(col)}
+            dec := getSymbolFromCursor(&cursor)
 
             if cursor.IsDefinition() {
+                /* TODO: what if the definition is also the declaration? */
                 db.InsertFuncDef(dec)
-
-                return clang.CVR_Recurse
             } else {
                 defCursor := cursor.DefinitionCursor()
                 if !defCursor.IsNull() {
-                    f, line, col, _ := defCursor.Location().GetFileLocation()
-                    fName := f.Name()
-                    def := &Symbol{defCursor.Spelling(), fName, int(line), int(col)}
-
+                    def := getSymbolFromCursor(&defCursor)
                     db.InsertFuncSymb(dec, def)
                 } else {
                     db.InsertSymbol(dec)
                 }
             }
-        case clang.CK_InclusionDirective:
+        case clang.CK_VarDecl, clang.CK_ParmDecl:
+            dec := getSymbolFromCursor(&cursor)
+            db.InsertSymbol(dec)
+        case clang.CK_CallExpr:
+            //decCursor := cursor.Referenced()
+            //dec := getSymbolFromCursor(&decCursor)
+            //fmt.Println("declaration?", dec)
+        case clang.CK_DeclRefExpr:
+            use := getSymbolFromCursor(&cursor)
+            decCursor := cursor.Referenced()
+            dec := getSymbolFromCursor(&decCursor)
+            db.InsertSymbolUse(use, dec)
         }
-        return clang.CVR_Continue
+
+        /* TODO: eventually we need to continue on some cases for faster run */
+        return clang.CVR_Recurse
     }
 
     tu.ToCursor().Visit(visitNode)

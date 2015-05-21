@@ -46,6 +46,7 @@ type SymbolsDB struct {
     delFileRef          *sql.Stmt
     insertFuncDef       *sql.Stmt
     insertFuncDecDef    *sql.Stmt
+    insertSymbUse       *sql.Stmt
 }
 
 func (db *SymbolsDB) empty() bool {
@@ -73,7 +74,7 @@ func (db *SymbolsDB) initDB() {
             line    INTEGER,
             col     INTEGER,
 
-            PRIMARY KEY(name, file, line, col),
+            PRIMARY KEY(name, file, line, col)
             FOREIGN KEY(file) REFERENCES files(id) ON DELETE CASCADE
         );
         CREATE TABLE func_defs (
@@ -82,7 +83,7 @@ func (db *SymbolsDB) initDB() {
             line    INTEGER,
             col     INTEGER,
 
-            PRIMARY KEY(name, file, line, col),
+            PRIMARY KEY(name, file, line, col)
             FOREIGN KEY(file) REFERENCES files(id) ON DELETE CASCADE
         );
         CREATE TABLE func_decs_defs (
@@ -104,6 +105,22 @@ func (db *SymbolsDB) initDB() {
                 REFERENCES symbol_decls(name, file, line, col) ON DELETE CASCADE
             FOREIGN KEY(name, def_file, def_line, def_col)
                 REFERENCES func_defs(name, file, line, col) ON DELETE CASCADE
+        );
+        CREATE TABLE symbol_uses (
+            name        TEXT,
+
+            file        INTEGER,
+            line        INTEGER,
+            col         INTEGER,
+
+            dec_file    INTEGER,
+            dec_line    INTEGER,
+            dec_col     INTEGER,
+
+            PRIMARY KEY(name, file, line, col)
+
+            FOREIGN KEY(name, dec_file, dec_line, dec_col)
+                REFERENCES symbol_decls(name, file, line, col) ON DELETE CASCADE
         );
     `
     _, err := db.db.Exec(initStmt)
@@ -127,7 +144,7 @@ func OpenSymbolsDB(path string) *SymbolsDB {
     }
 
     r.insertFile, err = db.Prepare(`
-        INSERT INTO files(path, file_info) VALUES (?, ?);
+        INSERT OR IGNORE INTO files(path, file_info) VALUES (?, ?);
     `)
     if err != nil {
         log.Fatal("prepare insert files ", err)
@@ -182,7 +199,26 @@ func OpenSymbolsDB(path string) *SymbolsDB {
         log.Fatal("prepare insert func dec/def ", err)
     }
 
+    r.insertSymbUse, err = db.Prepare(`
+        INSERT INTO symbol_uses
+        SELECT ?, f1.id, ?, ?, f2.id, ?, ? FROM files f1, files f2
+        WHERE f1.path = ? AND f2.path = ?;
+    `)
+    if err != nil {
+        log.Fatal("preapre insert symbol use ", err)
+    }
+
     return r
+}
+
+func (db *SymbolsDB) InsertSymbolUse(use, dec *Symbol) {
+    _, err := db.insertSymbUse.Exec(dec.name,
+                                    use.line, use.col,
+                                    dec.line, dec.col,
+                                    use.file, dec.file)
+    if err != nil {
+        log.Fatal("insert symbol user ", err)
+    }
 }
 
 func (db *SymbolsDB) InsertSymbol(sym *Symbol) {
@@ -292,11 +328,6 @@ func (db *SymbolsDB) NeedToProcessFile(file string) bool {
         }
     }
 
-    /* TODO: fix race here! If two threads discover the same file at the
-     * same time this will hit a UNIQUE constraint violated. This could
-     * happen if a .c file includes a .h file and they are both explored
-     * at the same time. */
-
     _, err = db.insertFile.Exec(file, fiBytes)
     if err != nil {
         log.Fatal("insert file ", err)
@@ -369,5 +400,6 @@ func (db *SymbolsDB) Close() {
     db.delFileRef.Close()
     db.insertFuncDef.Close()
     db.insertFuncDecDef.Close()
+    db.insertSymbUse.Close()
     db.db.Close()
 }

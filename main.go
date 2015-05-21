@@ -196,8 +196,6 @@ func main() {
             case event, ok := <-watcher.Events:
                 if !ok { return }
                 handleChange(event, db, watcher, files)
-
-                log.Println("event ", event, event.Name)
             case err, ok := <-watcher.Errors:
                 if !ok { return }
 
