@@ -20,7 +20,7 @@ import (
     "bytes"
     "database/sql"
     "encoding/binary"
-    _ "github.com/mattn/go-sqlite3"
+    sqlite "github.com/mattn/go-sqlite3"
     "log"
     "os"
 )
@@ -345,15 +345,15 @@ func (db *SymbolsDB) NeedToProcessFile(file string) bool {
         }
     }
 
-    /* TODO: fix race here! If two threads discover the same file at the
-     * same time this will hit a UNIQUE constraint violated. This could
-     * happen if a .c file includes a .h file and they are both explored
-     * at the same time. If one fail to insert because of constraint
-     * violation, we should return false as it is already being explored. */
-
     _, err = db.insertFile.Exec(file, fiBytes)
     if err != nil {
-        log.Fatal("insert file ", err)
+        sqliteErr := err.(sqlite.Error)
+        if sqliteErr.ExtendedCode == sqlite.ErrConstraintUnique {
+            /* two threads tried to add the same file, fail the second one */
+            return false
+        } else {
+            log.Fatal("insert file ", err)
+        }
     }
 
     return true
