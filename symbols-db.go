@@ -14,10 +14,6 @@
  * limitations under the License.
  */
 
-/* TODO: should we consider the case where multiple declarations and multiple
- * definitions exist for the same symbol? This could happen before C
- * preprocesor */
-
 package main
 
 import (
@@ -47,6 +43,7 @@ type SymbolsDB struct {
     insertFuncDef       *sql.Stmt
     insertFuncDecDef    *sql.Stmt
     insertSymbUse       *sql.Stmt
+    insertFuncCall      *sql.Stmt
 }
 
 func (db *SymbolsDB) empty() bool {
@@ -108,6 +105,7 @@ func (db *SymbolsDB) initDB() {
         );
         CREATE TABLE symbol_uses (
             name        TEXT,
+            call        INTEGER DEFAULT 0,
 
             file        INTEGER,
             line        INTEGER,
@@ -200,15 +198,34 @@ func OpenSymbolsDB(path string) *SymbolsDB {
     }
 
     r.insertSymbUse, err = db.Prepare(`
-        INSERT INTO symbol_uses
-        SELECT ?, f1.id, ?, ?, f2.id, ?, ? FROM files f1, files f2
+        INSERT OR IGNORE INTO symbol_uses
+        SELECT ?, 0, f1.id, ?, ?, f2.id, ?, ? FROM files f1, files f2
         WHERE f1.path = ? AND f2.path = ?;
     `)
     if err != nil {
         log.Fatal("preapre insert symbol use ", err)
     }
 
+    r.insertFuncCall, err = db.Prepare(`
+        INSERT OR REPLACE INTO symbol_uses
+        SELECT ?, 1, f1.id, ?, ?, f2.id, ?, ? FROM files f1, files f2
+        WHERE f1.path = ? AND f2.path = ?;
+    `)
+    if err != nil {
+        log.Fatal("preapre insert func call ", err)
+    }
+
     return r
+}
+
+func (db *SymbolsDB) InsertFuncCall(call, dec *Symbol) {
+    _, err := db.insertFuncCall.Exec(dec.name,
+                                    call.line, call.col,
+                                    dec.line, dec.col,
+                                    call.file, dec.file)
+    if err != nil {
+        log.Fatal("insert func call ", err)
+    }
 }
 
 func (db *SymbolsDB) InsertSymbolUse(use, dec *Symbol) {
@@ -407,5 +424,6 @@ func (db *SymbolsDB) Close() {
     db.insertFuncDef.Close()
     db.insertFuncDecDef.Close()
     db.insertSymbUse.Close()
+    db.insertFuncCall.Close()
     db.db.Close()
 }
