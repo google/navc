@@ -71,6 +71,8 @@ func (db *SymbolsDB) initDB() {
             line    INTEGER,
             col     INTEGER,
 
+            param   INTEGER,
+
             PRIMARY KEY(name, file, line, col)
             FOREIGN KEY(file) REFERENCES files(id) ON DELETE CASCADE
         );
@@ -156,8 +158,8 @@ func OpenSymbolsDB(path string) *SymbolsDB {
     }
 
     r.insertSymb, err = db.Prepare(`
-        INSERT OR IGNORE INTO symbol_decls(name, file, line, col)
-            SELECT ?, id, ?, ? FROM files
+        INSERT OR IGNORE INTO symbol_decls
+            SELECT ?, id, ?, ?, ? FROM files
             WHERE path = ?;
     `)
     if err != nil {
@@ -239,9 +241,16 @@ func (db *SymbolsDB) InsertSymbolUse(use, dec *Symbol) {
 }
 
 func (db *SymbolsDB) InsertSymbol(sym *Symbol) {
-    _, err := db.insertSymb.Exec(sym.name, sym.line, sym.col, sym.file)
+    _, err := db.insertSymb.Exec(sym.name, sym.line, sym.col, false, sym.file)
     if err != nil {
         log.Fatal("insert symbol ", err)
+    }
+}
+
+func (db *SymbolsDB) InsertParamDecl(sym *Symbol) {
+    _, err := db.insertSymb.Exec(sym.name, sym.line, sym.col, true, sym.file)
+    if err != nil {
+        log.Fatal("insert symbol param ", err)
     }
 }
 

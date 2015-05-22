@@ -80,9 +80,14 @@ func Parse(file string, db *SymbolsDB) {
                     db.InsertSymbol(dec)
                 }
             }
-        case clang.CK_VarDecl, clang.CK_ParmDecl:
+        case clang.CK_VarDecl:
             dec := getSymbolFromCursor(&cursor)
             db.InsertSymbol(dec)
+        case clang.CK_ParmDecl:
+            if cursor.Spelling() != "" {
+                dec := getSymbolFromCursor(&cursor)
+                db.InsertParamDecl(dec)
+            }
         case clang.CK_CallExpr:
             call := getSymbolFromCursor(&cursor)
             decCursor := cursor.Referenced()
