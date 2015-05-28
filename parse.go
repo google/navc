@@ -70,8 +70,6 @@ func Parse(file string, db *SymbolsDB) {
             defCursor := cursor.DefinitionCursor()
             if !defCursor.IsNull() {
                 def := getSymbolFromCursor(&defCursor)
-                fmt.Println("declaration ", dec)
-                fmt.Println("definition ", def)
                 db.InsertFuncSymb(dec, def)
             } else {
                 db.InsertSymbol(dec)
