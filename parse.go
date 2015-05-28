@@ -24,7 +24,7 @@ import (
 func getSymbolFromCursor(cursor *clang.Cursor) *Symbol {
     f, line, col, _ := cursor.Location().GetFileLocation()
     fName := f.Name()
-    return &Symbol{cursor.Spelling(), fName, int(line), int(col)}
+    return &Symbol{cursor.Spelling(), cursor.USR(), fName, int(line), int(col)}
 }
 
 func Parse(file string, db *SymbolsDB) {
@@ -67,18 +67,14 @@ func Parse(file string, db *SymbolsDB) {
         switch cursor.Kind() {
         case clang.CK_FunctionDecl:
             dec := getSymbolFromCursor(&cursor)
-
-            if cursor.IsDefinition() {
-                /* TODO: what if the definition is also the declaration? */
-                db.InsertFuncDef(dec)
+            defCursor := cursor.DefinitionCursor()
+            if !defCursor.IsNull() {
+                def := getSymbolFromCursor(&defCursor)
+                fmt.Println("declaration ", dec)
+                fmt.Println("definition ", def)
+                db.InsertFuncSymb(dec, def)
             } else {
-                defCursor := cursor.DefinitionCursor()
-                if !defCursor.IsNull() {
-                    def := getSymbolFromCursor(&defCursor)
-                    db.InsertFuncSymb(dec, def)
-                } else {
-                    db.InsertSymbol(dec)
-                }
+                db.InsertSymbol(dec)
             }
         case clang.CK_VarDecl:
             dec := getSymbolFromCursor(&cursor)

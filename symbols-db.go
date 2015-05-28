@@ -27,6 +27,7 @@ import (
 
 type Symbol struct {
     name    string
+    unisr   string
     file    string
     line    int
     col     int
@@ -62,32 +63,24 @@ func (db *SymbolsDB) initDB() {
         CREATE TABLE files (
             id          INTEGER,
             file_info   BLOB,
-            path        TEXT UNIQUE,
+            path        TEXT UNIQUE NOT NULL,
             PRIMARY     KEY(id)
         );
         CREATE TABLE symbol_decls (
-            name    TEXT,
+            name    TEXT NOT NULL,
+            unisr   TEXT NOT NULL,
             file    INTEGER,
             line    INTEGER,
             col     INTEGER,
 
-            param   INTEGER,
+            param   INTEGER DEFAULT 0,
 
-            PRIMARY KEY(name, file, line, col)
-            FOREIGN KEY(file) REFERENCES files(id) ON DELETE CASCADE
-        );
-        CREATE TABLE func_defs (
-            name    TEXT,
-            file    INTEGER,
-            line    INTEGER,
-            col     INTEGER,
+            def     INTEGER DEFAULT 0,
 
-            PRIMARY KEY(name, file, line, col)
+            PRIMARY KEY(file, line, col)
             FOREIGN KEY(file) REFERENCES files(id) ON DELETE CASCADE
         );
         CREATE TABLE func_decs_defs (
-            name        TEXT,
-
             dec_file    INTEGER,
             dec_line    INTEGER,
             dec_col     INTEGER,
@@ -96,17 +89,15 @@ func (db *SymbolsDB) initDB() {
             def_line    INTEGER,
             def_col     INTEGER,
 
-            PRIMARY KEY(name,
-                dec_file, dec_line, dec_col,
-                def_file, dec_line, dec_col)
+            PRIMARY KEY(dec_file, dec_line, dec_col,
+                        def_file, dec_line, dec_col)
 
-            FOREIGN KEY(name, dec_file, dec_line, dec_col)
-                REFERENCES symbol_decls(name, file, line, col) ON DELETE CASCADE
-            FOREIGN KEY(name, def_file, def_line, def_col)
-                REFERENCES func_defs(name, file, line, col) ON DELETE CASCADE
+            FOREIGN KEY(dec_file, dec_line, dec_col)
+                REFERENCES symbol_decls(file, line, col) ON DELETE CASCADE
+            FOREIGN KEY(def_file, def_line, def_col)
+                REFERENCES symbol_decls(file, line, col) ON DELETE CASCADE
         );
         CREATE TABLE symbol_uses (
-            name        TEXT,
             call        INTEGER DEFAULT 0,
 
             file        INTEGER,
@@ -117,10 +108,10 @@ func (db *SymbolsDB) initDB() {
             dec_line    INTEGER,
             dec_col     INTEGER,
 
-            PRIMARY KEY(name, file, line, col)
+            PRIMARY KEY(file, line, col)
 
-            FOREIGN KEY(name, dec_file, dec_line, dec_col)
-                REFERENCES symbol_decls(name, file, line, col) ON DELETE CASCADE
+            FOREIGN KEY(dec_file, dec_line, dec_col)
+                REFERENCES symbol_decls(file, line, col) ON DELETE CASCADE
         );
     `
     _, err := db.db.Exec(initStmt)
@@ -158,8 +149,8 @@ func OpenSymbolsDB(path string) *SymbolsDB {
     }
 
     r.insertSymb, err = db.Prepare(`
-        INSERT OR IGNORE INTO symbol_decls
-            SELECT ?, id, ?, ?, ? FROM files
+        INSERT OR IGNORE INTO symbol_decls(name, unisr, file, line, col, param)
+            SELECT ?, ?, id, ?, ?, ? FROM files
             WHERE path = ?;
     `)
     if err != nil {
@@ -182,8 +173,8 @@ func OpenSymbolsDB(path string) *SymbolsDB {
     }
 
     r.insertFuncDef, err = db.Prepare(`
-        INSERT OR IGNORE INTO func_defs(name, file, line, col)
-            SELECT ?, id, ?, ? FROM files
+        INSERT OR IGNORE INTO symbol_decls(name, unisr, file, line, col, def)
+            SELECT ?, ?, id, ?, ?, 1 FROM files
             WHERE path = ?;
     `)
     if err != nil {
@@ -192,7 +183,7 @@ func OpenSymbolsDB(path string) *SymbolsDB {
 
     r.insertFuncDecDef, err = db.Prepare(`
         INSERT INTO func_decs_defs
-            SELECT ?, f1.id, ?, ?, f2.id, ?, ? FROM files f1, files f2
+            SELECT f1.id, ?, ?, f2.id, ?, ? FROM files f1, files f2
             WHERE f1.path = ? AND f2.path = ?;
     `)
     if err != nil {
@@ -201,7 +192,7 @@ func OpenSymbolsDB(path string) *SymbolsDB {
 
     r.insertSymbUse, err = db.Prepare(`
         INSERT OR IGNORE INTO symbol_uses
-        SELECT ?, 0, f1.id, ?, ?, f2.id, ?, ? FROM files f1, files f2
+        SELECT 0, f1.id, ?, ?, f2.id, ?, ? FROM files f1, files f2
         WHERE f1.path = ? AND f2.path = ?;
     `)
     if err != nil {
@@ -210,7 +201,7 @@ func OpenSymbolsDB(path string) *SymbolsDB {
 
     r.insertFuncCall, err = db.Prepare(`
         INSERT OR REPLACE INTO symbol_uses
-        SELECT ?, 1, f1.id, ?, ?, f2.id, ?, ? FROM files f1, files f2
+        SELECT 1, f1.id, ?, ?, f2.id, ?, ? FROM files f1, files f2
         WHERE f1.path = ? AND f2.path = ?;
     `)
     if err != nil {
@@ -221,18 +212,16 @@ func OpenSymbolsDB(path string) *SymbolsDB {
 }
 
 func (db *SymbolsDB) InsertFuncCall(call, dec *Symbol) {
-    _, err := db.insertFuncCall.Exec(dec.name,
-                                    call.line, call.col,
-                                    dec.line, dec.col,
-                                    call.file, dec.file)
+    _, err := db.insertFuncCall.Exec(call.line, call.col,
+                                     dec.line, dec.col,
+                                     call.file, dec.file)
     if err != nil {
         log.Fatal("insert func call ", err)
     }
 }
 
 func (db *SymbolsDB) InsertSymbolUse(use, dec *Symbol) {
-    _, err := db.insertSymbUse.Exec(dec.name,
-                                    use.line, use.col,
+    _, err := db.insertSymbUse.Exec(use.line, use.col,
                                     dec.line, dec.col,
                                     use.file, dec.file)
     if err != nil {
@@ -241,14 +230,16 @@ func (db *SymbolsDB) InsertSymbolUse(use, dec *Symbol) {
 }
 
 func (db *SymbolsDB) InsertSymbol(sym *Symbol) {
-    _, err := db.insertSymb.Exec(sym.name, sym.line, sym.col, false, sym.file)
+    _, err := db.insertSymb.Exec(sym.name, sym.unisr,
+                                 sym.line, sym.col, false, sym.file)
     if err != nil {
         log.Fatal("insert symbol ", err)
     }
 }
 
 func (db *SymbolsDB) InsertParamDecl(sym *Symbol) {
-    _, err := db.insertSymb.Exec(sym.name, sym.line, sym.col, true, sym.file)
+    _, err := db.insertSymb.Exec(sym.name, sym.unisr,
+                                 sym.line, sym.col, true, sym.file)
     if err != nil {
         log.Fatal("insert symbol param ", err)
     }
@@ -399,7 +390,8 @@ func (db *SymbolsDB) GetSetFilesInDB() map[string]bool {
 
 func (db *SymbolsDB) InsertFuncDef(def *Symbol) {
     /* insert function definition. Ignore if already exists. */
-    _, err := db.insertFuncDef.Exec(def.name, def.line, def.col, def.file)
+    _, err := db.insertFuncDef.Exec(def.name, def.unisr,
+                                    def.line, def.col, def.file)
     if err != nil {
         log.Fatal("insert func def ", err)
     }
@@ -413,7 +405,6 @@ func (db *SymbolsDB) InsertFuncSymb(dec, def *Symbol) {
 
     /* point this declaration to its definition */
     _, err := db.insertFuncDecDef.Exec(
-        dec.name,
         dec.line, dec.col,
         def.line, def.col,
         dec.file, def.file)
