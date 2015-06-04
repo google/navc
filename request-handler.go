@@ -20,23 +20,7 @@ type RequestHandler struct {
     db  *SymbolsDB
 }
 
-func (rh *RequestHandler) GetFuncDef(fun string, file *string) error {
-    // TODO: return function definitions with the matching name.
-    // Note that the output should be a list of structures with
-    // file names and locations within the file
-
-    /*
-    funs, _ := db.GetFunctions("main")
-    for _, f := range funs {
-        log.Println(f)
-    }
-    */
-
-    return nil
-}
-
-func (rh *RequestHandler) GetSymbolDecl(symbol string, file *string) error {
-    // TODO: return symbol declaration with the matching name.
-    // Same note as previous function (return is a placeholder)
+func (rh *RequestHandler) GetSymbolDecl(use *Symbol, res *Symbol) error {
+    *res = *rh.db.GetSymbolDecl(use)
     return nil
 }

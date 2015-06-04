@@ -18,6 +18,15 @@
  * a mix of comments syntax.
  */
 
+/* TODO: We have a problem with file dependencies. What if header files change?
+ * All files dependent to this one should also be updated recursively. What
+ * if the header is removed? Where would all the symbols go? What if the header
+ * shows up again?
+ *
+ * We need to solve all this issues and it may require plenty of changes in the
+ * symbols DB.
+ */
+
 package main
 
 import (

@@ -26,11 +26,11 @@ import (
 )
 
 type Symbol struct {
-    name    string
-    unisr   string
-    file    string
-    line    int
-    col     int
+    Name    string
+    Unisr   string
+    File    string
+    Line    int
+    Col     int
 }
 
 type SymbolsDB struct {
@@ -39,7 +39,7 @@ type SymbolsDB struct {
     insertFile          *sql.Stmt
     selectFileInfo      *sql.Stmt
     insertSymb          *sql.Stmt
-    selectSymb          *sql.Stmt
+    selectSymbDecl      *sql.Stmt
     delFileRef          *sql.Stmt
     insertFuncDef       *sql.Stmt
     insertFuncDecDef    *sql.Stmt
@@ -157,9 +157,12 @@ func OpenSymbolsDB(path string) *SymbolsDB {
         log.Fatal("prepare insert symbol ", err)
     }
 
-    r.selectSymb, err = db.Prepare(`
-        SELECT name, path, line, col FROM symbol_decls, files
-        WHERE name = ? AND id = file;
+    r.selectSymbDecl, err = db.Prepare(`
+        SELECT st.name, st.unisr, path, st.line, st.col
+            FROM symbol_decls st, symbol_uses su, files
+            WHERE su.dec_file = st.file AND su.dec_line = st.line AND
+                su.dec_col = st.col AND st.file = id AND
+                path = ? AND su.line = ? AND su.col = ?;
     `)
     if err != nil {
         log.Fatal("prepare select symbol ", err)
@@ -192,8 +195,8 @@ func OpenSymbolsDB(path string) *SymbolsDB {
 
     r.insertSymbUse, err = db.Prepare(`
         INSERT OR IGNORE INTO symbol_uses
-        SELECT 0, f1.id, ?, ?, f2.id, ?, ? FROM files f1, files f2
-        WHERE f1.path = ? AND f2.path = ?;
+            SELECT 0, f1.id, ?, ?, f2.id, ?, ? FROM files f1, files f2
+                WHERE f1.path = ? AND f2.path = ?;
     `)
     if err != nil {
         log.Fatal("preapre insert symbol use ", err)
@@ -201,8 +204,8 @@ func OpenSymbolsDB(path string) *SymbolsDB {
 
     r.insertFuncCall, err = db.Prepare(`
         INSERT OR REPLACE INTO symbol_uses
-        SELECT 1, f1.id, ?, ?, f2.id, ?, ? FROM files f1, files f2
-        WHERE f1.path = ? AND f2.path = ?;
+            SELECT 1, f1.id, ?, ?, f2.id, ?, ? FROM files f1, files f2
+                WHERE f1.path = ? AND f2.path = ?;
     `)
     if err != nil {
         log.Fatal("preapre insert func call ", err)
@@ -212,59 +215,58 @@ func OpenSymbolsDB(path string) *SymbolsDB {
 }
 
 func (db *SymbolsDB) InsertFuncCall(call, dec *Symbol) {
-    _, err := db.insertFuncCall.Exec(call.line, call.col,
-                                     dec.line, dec.col,
-                                     call.file, dec.file)
+    _, err := db.insertFuncCall.Exec(call.Line, call.Col,
+                                     dec.Line, dec.Col,
+                                     call.File, dec.File)
     if err != nil {
         log.Fatal("insert func call ", err)
     }
 }
 
 func (db *SymbolsDB) InsertSymbolUse(use, dec *Symbol) {
-    _, err := db.insertSymbUse.Exec(use.line, use.col,
-                                    dec.line, dec.col,
-                                    use.file, dec.file)
+    _, err := db.insertSymbUse.Exec(use.Line, use.Col,
+                                    dec.Line, dec.Col,
+                                    use.File, dec.File)
     if err != nil {
         log.Fatal("insert symbol user ", err)
     }
 }
 
 func (db *SymbolsDB) InsertSymbol(sym *Symbol) {
-    _, err := db.insertSymb.Exec(sym.name, sym.unisr,
-                                 sym.line, sym.col, false, sym.file)
+    _, err := db.insertSymb.Exec(sym.Name, sym.Unisr,
+                                 sym.Line, sym.Col, false, sym.File)
     if err != nil {
         log.Fatal("insert symbol ", err)
     }
 }
 
 func (db *SymbolsDB) InsertParamDecl(sym *Symbol) {
-    _, err := db.insertSymb.Exec(sym.name, sym.unisr,
-                                 sym.line, sym.col, true, sym.file)
+    _, err := db.insertSymb.Exec(sym.Name, sym.Unisr,
+                                 sym.Line, sym.Col, true, sym.File)
     if err != nil {
         log.Fatal("insert symbol param ", err)
     }
 }
 
-func (db *SymbolsDB) GetSymbols(name string) []*Symbol {
-    r, err := db.selectSymb.Query(name)
+func (db *SymbolsDB) GetSymbolDecl(use *Symbol) *Symbol {
+    r, err := db.selectSymbDecl.Query(use.File, use.Line, use.Col)
     if err != nil {
-        log.Fatal("select symbol ", err)
+        log.Fatal("select symbol decl ", err)
     }
     defer r.Close()
 
-    rs := make([]*Symbol, 0)
-    for r.Next() {
+    if r.Next() {
         s := new(Symbol)
 
-        err = r.Scan(&s.name, &s.file, &s.line, &s.col)
+        err = r.Scan(&s.Name, &s.Unisr, &s.File, &s.Line, &s.Col)
         if err != nil {
             log.Fatal("scan symbol ", err)
         }
 
-        rs = append(rs, s)
+        return s
+    } else {
+        return nil
     }
-
-    return rs
 }
 
 func getFileInfoBytes(fi os.FileInfo) []byte {
@@ -390,8 +392,8 @@ func (db *SymbolsDB) GetSetFilesInDB() map[string]bool {
 
 func (db *SymbolsDB) InsertFuncDef(def *Symbol) {
     /* insert function definition. Ignore if already exists. */
-    _, err := db.insertFuncDef.Exec(def.name, def.unisr,
-                                    def.line, def.col, def.file)
+    _, err := db.insertFuncDef.Exec(def.Name, def.Unisr,
+                                    def.Line, def.Col, def.File)
     if err != nil {
         log.Fatal("insert func def ", err)
     }
@@ -405,9 +407,9 @@ func (db *SymbolsDB) InsertFuncSymb(dec, def *Symbol) {
 
     /* point this declaration to its definition */
     _, err := db.insertFuncDecDef.Exec(
-        dec.line, dec.col,
-        def.line, def.col,
-        dec.file, def.file)
+        dec.Line, dec.Col,
+        def.Line, def.Col,
+        dec.File, def.File)
     if err != nil {
         log.Fatal("insert func dec to def ", err)
     }
@@ -419,7 +421,7 @@ func (db *SymbolsDB) Close() {
     db.insertFile.Close()
     db.selectFileInfo.Close()
     db.insertSymb.Close()
-    db.selectSymb.Close()
+    db.selectSymbDecl.Close()
     db.delFileRef.Close()
     db.insertFuncDef.Close()
     db.insertFuncDecDef.Close()

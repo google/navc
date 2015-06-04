@@ -36,10 +36,14 @@ func main() {
     client := rpc.NewClientWithCodec(codec)
     defer client.Close()
 
-    var reply string
-    err = client.Call("RequestHandler.GetFuncDef", "f", &reply)
+    // sample call
+    args := Symbol{"", "", "sample/a.c", 16, 2}
+    var reply Symbol
+    err = client.Call("RequestHandler.GetSymbolDecl",
+        &args,
+        &reply)
     if err != nil {
-        log.Fatal("calling", err)
+        log.Fatal("calling ", err)
     }
 
     log.Println(reply)
