@@ -1,3 +1,4 @@
 .navc_dbsymbols
 .navc_socket
 sample
+*.pyc
