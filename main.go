@@ -72,20 +72,20 @@ func explorePathToParse(path string,
 
         f, err := os.Open(path)
         if err != nil {
-            log.Println(err, " opening ", path, ", ignoring")
+            log.Println(err, "opening", path, ", ignoring")
             continue
         }
 
         info, err := f.Stat()
         if err != nil {
-            log.Println(err, " stating ", path, ", ignoring")
+            log.Println(err, "stating", path, ", ignoring")
             continue
         }
 
         // visit file
         if !info.IsDir() {
             // ignore non-C files
-            validC, _ := regexp.MatchString(`.*\.[ch]`, path)
+            validC, _ := regexp.MatchString(`.*\.[ch]$`, path)
             if validC {
                 visitC(path)
             }
@@ -237,6 +237,7 @@ func main() {
     }
 
     // start serving requests
+    os.Remove(socketFile)
     lis, err := net.Listen("unix", socketFile)
     if err != nil {
         log.Println("error opening socket", err)

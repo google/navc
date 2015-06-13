@@ -16,11 +16,18 @@
 
 package main
 
+import "fmt"
+
 type RequestHandler struct {
     db  *SymbolsDB
 }
 
 func (rh *RequestHandler) GetSymbolDecl(use *Symbol, res *Symbol) error {
-    *res = *rh.db.GetSymbolDecl(use)
-    return nil
+    dec := rh.db.GetSymbolDecl(use)
+    if dec != nil {
+        *res = *dec
+        return nil
+    } else {
+        return fmt.Errorf("Symbol use not found")
+    }
 }
