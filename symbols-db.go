@@ -158,11 +158,18 @@ func OpenSymbolsDB(path string) *SymbolsDB {
     }
 
     r.selectSymbDecl, err = db.Prepare(`
-        SELECT st.name, st.unisr, path, st.line, st.col
-            FROM symbol_decls st, symbol_uses su, files
-            WHERE su.dec_file = st.file AND su.dec_line = st.line AND
-                su.dec_col = st.col AND st.file = id AND
-                path = ? AND su.line = ? AND su.col = ?;
+        SELECT st.name, st.unisr, f2.path, st.line, st.col
+            FROM symbol_decls st, symbol_uses su, files f1, files f2
+            WHERE
+                -- symbol use and symbol declaration join
+                su.dec_file = st.file AND
+                su.dec_line = st.line AND
+                su.dec_col = st.col AND
+                -- symbol declaration to file join
+                f2.id = st.file AND
+                -- symbol use and file join
+                su.file = f1.id AND
+                f1.path = ? AND su.line = ? AND su.col = ?;
     `)
     if err != nil {
         log.Fatal("prepare select symbol ", err)
