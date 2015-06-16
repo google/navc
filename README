@@ -11,3 +11,14 @@ navc is in its early stages. There is still plenty of code to be written.
 
 DISCLAIMER: This is not a official Google project and it is not supported
 by Google Inc.
+
+Requirements
+============
+For the daemon you need the following libraries:
+* libclang: https://github.com/sbinet/go-clang
+* fsnotify: https://github.com/go-fsnotify/fsnotify
+* sqlite3: https://github.com/mattn/go-sqlite3
+
+For the vim plugin to work, you need vim with python support. You also need to
+include the jsonrpc file in the PYTHONPATH env variable. Examples can be found
+in navc.vim.
