@@ -21,14 +21,20 @@ from the test directory as:
 import jsonrpc
 
 server = jsonrpc.ServerProxy(jsonrpc.JsonRpc10(),
-         jsonrpc.TransportUnixSocket(addr='/tmp/navc.sock'))
+         jsonrpc.TransportUnixSocket(addr='/tmp/navc.sock', logfunc=jsonrpc.log_stdout))
 
 args = {
-    "Name": "",
-    "Unisr": "",
     "File": "sample/a.c",
     "Line": 16,
     "Col": 2,
 }
 ret = server.RequestHandler.GetSymbolDecl(args)
+print ret
+
+args = {
+    "File": "sample/a.c",
+    "Line": 14,
+    "Col": 2,
+}
+ret = server.RequestHandler.GetSymbolUses(args)
 print ret

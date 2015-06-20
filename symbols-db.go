@@ -39,12 +39,13 @@ type SymbolsDB struct {
     insertFile          *sql.Stmt
     selectFileInfo      *sql.Stmt
     insertSymb          *sql.Stmt
-    selectSymbDecl      *sql.Stmt
-    delFileRef          *sql.Stmt
     insertFuncDef       *sql.Stmt
     insertFuncDecDef    *sql.Stmt
     insertSymbUse       *sql.Stmt
     insertFuncCall      *sql.Stmt
+    delFileRef          *sql.Stmt
+    selectSymbDecl      *sql.Stmt
+    selectSymbUses      *sql.Stmt
 }
 
 func (db *SymbolsDB) empty() bool {
@@ -134,18 +135,13 @@ func OpenSymbolsDB(path string) *SymbolsDB {
         r.initDB()
     }
 
+    /* DB inserts */
+
     r.insertFile, err = db.Prepare(`
         INSERT INTO files(path, file_info) VALUES (?, ?);
     `)
     if err != nil {
         log.Fatal("prepare insert files ", err)
-    }
-
-    r.selectFileInfo, err = db.Prepare(`
-        SELECT file_info FROM files WHERE path = ?;
-    `)
-    if err != nil {
-        log.Fatal("prepare select hash ", err)
     }
 
     r.insertSymb, err = db.Prepare(`
@@ -155,31 +151,6 @@ func OpenSymbolsDB(path string) *SymbolsDB {
     `)
     if err != nil {
         log.Fatal("prepare insert symbol ", err)
-    }
-
-    r.selectSymbDecl, err = db.Prepare(`
-        SELECT st.name, st.unisr, f2.path, st.line, st.col
-            FROM symbol_decls st, symbol_uses su, files f1, files f2
-            WHERE
-                -- symbol use and symbol declaration join
-                su.dec_file = st.file AND
-                su.dec_line = st.line AND
-                su.dec_col = st.col AND
-                -- symbol declaration to file join
-                f2.id = st.file AND
-                -- symbol use and file join
-                su.file = f1.id AND
-                f1.path = ? AND su.line = ? AND su.col = ?;
-    `)
-    if err != nil {
-        log.Fatal("prepare select symbol ", err)
-    }
-
-    r.delFileRef, err = db.Prepare(`
-        DELETE FROM files WHERE path = ?;
-    `)
-    if err != nil {
-        log.Fatal("prepare delete file ", err)
     }
 
     r.insertFuncDef, err = db.Prepare(`
@@ -216,6 +187,61 @@ func OpenSymbolsDB(path string) *SymbolsDB {
     `)
     if err != nil {
         log.Fatal("preapre insert func call ", err)
+    }
+
+    /* DB (only) delete */
+
+    r.delFileRef, err = db.Prepare(`
+        DELETE FROM files WHERE path = ?;
+    `)
+    if err != nil {
+        log.Fatal("prepare delete file ", err)
+    }
+
+    /* DB selects */
+
+    r.selectFileInfo, err = db.Prepare(`
+        SELECT file_info FROM files WHERE path = ?;
+    `)
+    if err != nil {
+        log.Fatal("prepare select hash ", err)
+    }
+
+    r.selectSymbDecl, err = db.Prepare(`
+        SELECT st.name, st.unisr, f2.path, st.line, st.col
+            FROM symbol_decls st, symbol_uses su, files f1, files f2
+            WHERE
+                -- symbol use and symbol declaration join
+                su.dec_file = st.file AND
+                su.dec_line = st.line AND
+                su.dec_col = st.col AND
+                -- symbol declaration to file join
+                f2.id = st.file AND
+                -- symbol use and file join
+                su.file = f1.id AND
+                -- select input
+                f1.path = ? AND su.line = ? AND su.col = ?;
+    `)
+    if err != nil {
+        log.Fatal("prepare select symbol ", err)
+    }
+
+    r.selectSymbUses, err = db.Prepare(`
+        SELECT f2.path, su2.line, su2.col
+            FROM files f1, files f2, symbol_uses su1, symbol_uses su2
+            WHERE
+                -- symbol use and files join
+                f1.id = su1.file AND
+                f2.id = su2.file AND
+                -- symbol uses with same declaration
+                su1.dec_file = su2.dec_file AND
+                su1.dec_line = su2.dec_line AND
+                su1.dec_col = su2.dec_col AND
+                -- select input
+                f1.path = ? AND su1.line = ? AND su1.col = ?;
+    `)
+    if err != nil {
+        log.Fatal("prepare select symbol uses ", err)
     }
 
     return r
@@ -274,6 +300,27 @@ func (db *SymbolsDB) GetSymbolDecl(use *Symbol) *Symbol {
     } else {
         return nil
     }
+}
+
+func (db *SymbolsDB) GetSymbolUses(use *Symbol) []*Symbol {
+    r, err := db.selectSymbUses.Query(use.File, use.Line, use.Col)
+    if err != nil {
+        log.Fatal("select symbol uses ", err)
+    }
+    defer r.Close()
+
+    ret := []*Symbol{}
+    for r.Next() {
+        s := new(Symbol)
+
+        err = r.Scan(&s.File, &s.Line, &s.Col)
+        if err != nil {
+            log.Fatal("scan symbol ", err)
+        }
+
+        ret = append(ret, s)
+    }
+    return ret
 }
 
 func getFileInfoBytes(fi os.FileInfo) []byte {
@@ -426,13 +473,17 @@ func (db *SymbolsDB) InsertFuncSymb(dec, def *Symbol) {
 
 func (db *SymbolsDB) Close() {
     db.insertFile.Close()
-    db.selectFileInfo.Close()
     db.insertSymb.Close()
-    db.selectSymbDecl.Close()
-    db.delFileRef.Close()
     db.insertFuncDef.Close()
     db.insertFuncDecDef.Close()
     db.insertSymbUse.Close()
     db.insertFuncCall.Close()
+
+    db.delFileRef.Close()
+
+    db.selectFileInfo.Close()
+    db.selectSymbDecl.Close()
+    db.selectSymbUses.Close()
+
     db.db.Close()
 }

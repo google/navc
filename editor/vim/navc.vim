@@ -55,8 +55,6 @@ fname = os.path.relpath(vim.current.buffer.name)
 #print fname, line, col
 
 args = {
-	"Name": "",
-	"Unisr": "",
 	"File": fname,
 	"Line": line,
 	"Col": col,
