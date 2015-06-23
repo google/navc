@@ -17,34 +17,34 @@
 package main
 
 import (
-    "log"
-    "net"
-    "net/rpc"
-    "net/rpc/jsonrpc"
+	"log"
+	"net"
+	"net/rpc"
+	"net/rpc/jsonrpc"
 )
 
 func main() {
-    conn, err := net.Dial("unix", "/tmp/navc.sock")
-    if err != nil {
-        log.Fatal("dial socket", err)
-    }
-    defer conn.Close()
+	conn, err := net.Dial("unix", "/tmp/navc.sock")
+	if err != nil {
+		log.Fatal("dial socket", err)
+	}
+	defer conn.Close()
 
-    codec := jsonrpc.NewClientCodec(conn)
-    defer codec.Close()
+	codec := jsonrpc.NewClientCodec(conn)
+	defer codec.Close()
 
-    client := rpc.NewClientWithCodec(codec)
-    defer client.Close()
+	client := rpc.NewClientWithCodec(codec)
+	defer client.Close()
 
-    // sample call
-    args := Symbol{"", "", "sample/a.c", 16, 2}
-    var reply Symbol
-    err = client.Call("RequestHandler.GetSymbolDecl",
-        &args,
-        &reply)
-    if err != nil {
-        log.Fatal("calling ", err)
-    }
+	// sample call
+	args := Symbol{"", "", "sample/a.c", 16, 2}
+	var reply Symbol
+	err = client.Call("RequestHandler.GetSymbolDecl",
+		&args,
+		&reply)
+	if err != nil {
+		log.Fatal("calling ", err)
+	}
 
-    log.Println(reply)
+	log.Println(reply)
 }

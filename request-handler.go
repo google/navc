@@ -19,25 +19,25 @@ package main
 import "fmt"
 
 type RequestHandler struct {
-    db  *SymbolsDB
+	db *SymbolsDB
 }
 
 func (rh *RequestHandler) GetSymbolDecl(use *Symbol, res *Symbol) error {
-    dec := rh.db.GetSymbolDecl(use)
-    if dec != nil {
-        *res = *dec
-        return nil
-    } else {
-        return fmt.Errorf("Symbol use not found")
-    }
+	dec := rh.db.GetSymbolDecl(use)
+	if dec != nil {
+		*res = *dec
+		return nil
+	} else {
+		return fmt.Errorf("Symbol use not found")
+	}
 }
 
 func (rh *RequestHandler) GetSymbolUses(use *Symbol, res *[]*Symbol) error {
-    uses := rh.db.GetSymbolUses(use)
-    if len(uses) > 0 {
-        *res = uses
-        return nil
-    } else {
-        return fmt.Errorf("Symbol use not found")
-    }
+	uses := rh.db.GetSymbolUses(use)
+	if len(uses) > 0 {
+		*res = uses
+		return nil
+	} else {
+		return fmt.Errorf("Symbol use not found")
+	}
 }
