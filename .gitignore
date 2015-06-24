@@ -2,3 +2,4 @@
 .navc_socket
 sample
 *.pyc
+*.swp

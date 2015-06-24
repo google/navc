@@ -41,6 +41,7 @@ import (
 )
 
 func processFile(files chan string, wg *sync.WaitGroup, db *SymbolsDB) {
+	wg.Add(1)
 	defer wg.Done()
 
 	// start exploring files
@@ -187,7 +188,6 @@ func main() {
 	defer close(files)
 
 	// start threads to process files
-	wg.Add(nIndexingThreads)
 	for i := 0; i < nIndexingThreads; i++ {
 		go processFile(files, &wg, db)
 	}
@@ -195,8 +195,8 @@ func main() {
 	// start file watcher
 	watcher, _ := fsnotify.NewWatcher()
 	defer watcher.Close()
-	wg.Add(1)
 	go func() {
+		wg.Add(1)
 		defer wg.Done()
 		for {
 			select {
@@ -250,9 +250,10 @@ func main() {
 
 	handler := rpc.NewServer()
 	handler.Register(&RequestHandler{db})
-	wg.Add(1)
 	go func() {
+		wg.Add(1)
 		defer wg.Done()
+
 		for {
 			conn, err := lis.Accept()
 			if err != nil {

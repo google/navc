@@ -23,6 +23,8 @@ import (
 	sqlite "github.com/mattn/go-sqlite3"
 	"log"
 	"os"
+	"sync"
+	"time"
 )
 
 type Symbol struct {
@@ -34,7 +36,14 @@ type Symbol struct {
 }
 
 type SymbolsDB struct {
-	db *sql.DB
+	db      *sql.DB
+	dbLite  *sqlite.SQLiteConn
+	ddb     *sql.DB
+	ddbLite *sqlite.SQLiteConn
+
+	wg     sync.WaitGroup
+	ticker <-chan time.Time
+	flush  chan interface{}
 
 	insertFile       *sql.Stmt
 	selectFileInfo   *sql.Stmt
@@ -121,19 +130,84 @@ func (db *SymbolsDB) initDB() {
 	}
 }
 
+func copyDb(src *sqlite.SQLiteConn, dst *sqlite.SQLiteConn) {
+	backup, err := dst.Backup("main", src, "main")
+	if err != nil {
+		return
+	}
+	defer backup.Finish()
+
+	backup.Step(-1)
+}
+
+func (db *SymbolsDB) flusher() {
+	db.wg.Add(1)
+	defer db.wg.Done()
+
+	db.ticker = time.Tick(30 * time.Second)
+	db.flush = make(chan interface{}, 1)
+
+	for {
+		select {
+		case <-db.ticker:
+			// if this takes too long, we need to flush piece-wise
+			copyDb(db.dbLite, db.ddbLite)
+		case _, ok := <-db.flush:
+			copyDb(db.dbLite, db.ddbLite)
+			if !ok {
+				return
+			}
+		}
+	}
+}
+
 func OpenSymbolsDB(path string) *SymbolsDB {
-	db, err := sql.Open("sqlite3", path)
+	/*
+	 * We need two DB connections in the symbol DB: one for the in memory
+	 * (main) database, and one for the in disk back database. Moreover, Go
+	 * sql interface does not provide functions to get SQLiteConn, that are
+	 * necessary to flow data from these two databases. For that reason, we
+	 * register a new driver with a connection hook that catch both
+	 * SQLiteConn for both DB connections.
+	 */
+
+	// open DB
+
+	sql3Conn := []*sqlite.SQLiteConn{}
+	sql.Register("sqlite3_conn_catch",
+		&sqlite.SQLiteDriver{
+			ConnectHook: func(newConn *sqlite.SQLiteConn) error {
+				sql3Conn = append(sql3Conn, newConn)
+				return nil
+			},
+		},
+	)
+
+	db, err := sql.Open("sqlite3_conn_catch", "file::memory:?cache=shared")
 	if err != nil {
 		log.Fatal("open db ", err)
 	}
+	db.Ping()
 
-	r := &SymbolsDB{db: db}
+	ddb, err := sql.Open("sqlite3_conn_catch", path)
+	if err != nil {
+		log.Fatal("open ddb ", err)
+	}
+	ddb.Ping()
+
+	r := &SymbolsDB{db: db, dbLite: sql3Conn[0], ddb: ddb, ddbLite: sql3Conn[1]}
+
+	// init DB
 
 	db.Exec(`PRAGMA foreign_keys = ON;`)
+
+	copyDb(r.ddbLite, r.dbLite)
 
 	if r.empty() {
 		r.initDB()
 	}
+
+	go r.flusher()
 
 	// DB inserts
 
@@ -485,5 +559,9 @@ func (db *SymbolsDB) Close() {
 	db.selectSymbDecl.Close()
 	db.selectSymbUses.Close()
 
+	close(db.flush)
+	db.wg.Wait()
+
+	db.ddb.Close()
 	db.db.Close()
 }
