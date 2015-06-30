@@ -237,7 +237,7 @@ func OpenSymbolsDB(path string) *SymbolsDB {
 	}
 
 	r.insertFuncDecDef, err = db.Prepare(`
-        INSERT INTO func_decs_defs
+        INSERT OR IGNORE INTO func_decs_defs
             SELECT f1.id, ?, ?, f2.id, ?, ? FROM files f1, files f2
             WHERE f1.path = ? AND f2.path = ?;
 	`)
