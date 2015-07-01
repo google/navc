@@ -36,7 +36,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sync"
 )
 
@@ -53,9 +52,7 @@ func processFile(files chan string, wg *sync.WaitGroup, db *SymbolsDB) {
 		}
 
 		log.Println("exploring", file)
-		if db.NeedToProcessFile(file) {
-			Parse(file, db)
-		}
+		Parse(file, db)
 	}
 }
 
@@ -135,7 +132,9 @@ func handleChange(event fsnotify.Event,
 		explorePathToParse(event.Name, visitorDir, visitorC)
 	case event.Op&(fsnotify.Remove|fsnotify.Rename) != 0:
 		watcher.Remove(event.Name)
-		db.RemoveFileReferences(event.Name)
+		tx := db.BeginTx()
+		tx.RemoveFileReferences(event.Name)
+		tx.Close()
 	}
 }
 
@@ -146,8 +145,8 @@ func main() {
 
 	// number of parallel indexing threads
 	var nIndexingThreads int
-	flag.IntVar(&nIndexingThreads, "numThreads", runtime.NumCPU(),
-		"Number of indexing threads")
+	flag.IntVar(&nIndexingThreads, "numThreads", 1,
+		"Number of indexing threads (don't use)")
 
 	// reset DB
 	var resetDb bool
@@ -234,9 +233,11 @@ func main() {
 	}
 
 	// remove from DB deleted files
+	tx := db.BeginTx()
 	for path := range removedFilesSet {
-		db.RemoveFileReferences(path)
+		tx.RemoveFileReferences(path)
 	}
+	tx.Close()
 
 	// start serving requests
 	os.Remove(socketFile)

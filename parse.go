@@ -28,6 +28,13 @@ func getSymbolFromCursor(cursor *clang.Cursor) *Symbol {
 }
 
 func Parse(file string, db *SymbolsDB) {
+	tx := db.BeginTx()
+	defer tx.Close()
+
+	if !tx.NeedToProcessFile(file) {
+		return
+	}
+
 	// files already inserted in the DB from this parsing
 	insertedFiles := map[string]bool{file: true}
 
@@ -54,13 +61,15 @@ func Parse(file string, db *SymbolsDB) {
 		}
 
 		// TODO: erase! this is not required
-		fmt.Printf("%s: %s (%s)\n",
-			cursor.Kind().Spelling(), cursor.Spelling(), cursor.USR())
-		fmt.Println(fName, ":", line, col)
+		if false {
+			fmt.Printf("%s: %s (%s)\n",
+				cursor.Kind().Spelling(), cursor.Spelling(), cursor.USR())
+			fmt.Println(fName, ":", line, col)
+		}
 		////////////////////////////////////
 
 		if !insertedFiles[fName] {
-			db.NeedToProcessFile(fName)
+			tx.NeedToProcessFile(fName)
 			insertedFiles[fName] = true
 		}
 
@@ -70,28 +79,28 @@ func Parse(file string, db *SymbolsDB) {
 			defCursor := cursor.DefinitionCursor()
 			if !defCursor.IsNull() {
 				def := getSymbolFromCursor(&defCursor)
-				db.InsertFuncSymb(dec, def)
+				tx.InsertFuncSymb(dec, def)
 			} else {
-				db.InsertSymbol(dec)
+				tx.InsertSymbol(dec)
 			}
 		case clang.CK_VarDecl:
 			dec := getSymbolFromCursor(&cursor)
-			db.InsertSymbol(dec)
+			tx.InsertSymbol(dec)
 		case clang.CK_ParmDecl:
 			if cursor.Spelling() != "" {
 				dec := getSymbolFromCursor(&cursor)
-				db.InsertParamDecl(dec)
+				tx.InsertParamDecl(dec)
 			}
 		case clang.CK_CallExpr:
 			call := getSymbolFromCursor(&cursor)
 			decCursor := cursor.Referenced()
 			dec := getSymbolFromCursor(&decCursor)
-			db.InsertFuncCall(call, dec)
+			tx.InsertFuncCall(call, dec)
 		case clang.CK_DeclRefExpr:
 			use := getSymbolFromCursor(&cursor)
 			decCursor := cursor.Referenced()
 			dec := getSymbolFromCursor(&decCursor)
-			db.InsertSymbolUse(use, dec)
+			tx.InsertSymbolUse(use, dec)
 		}
 
 		// TODO: eventually we need to continue on some cases for faster run

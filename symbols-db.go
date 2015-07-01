@@ -45,16 +45,8 @@ type SymbolsDB struct {
 	ticker <-chan time.Time
 	flush  chan interface{}
 
-	insertFile       *sql.Stmt
-	selectFileInfo   *sql.Stmt
-	insertSymb       *sql.Stmt
-	insertFuncDef    *sql.Stmt
-	insertFuncDecDef *sql.Stmt
-	insertSymbUse    *sql.Stmt
-	insertFuncCall   *sql.Stmt
-	delFileRef       *sql.Stmt
-	selectSymbDecl   *sql.Stmt
-	selectSymbUses   *sql.Stmt
+	selectSymbDecl *sql.Stmt
+	selectSymbUses *sql.Stmt
 }
 
 func (db *SymbolsDB) empty() bool {
@@ -195,7 +187,10 @@ func OpenSymbolsDB(path string) *SymbolsDB {
 	}
 	ddb.Ping()
 
-	r := &SymbolsDB{db: db, dbLite: sql3Conn[0], ddb: ddb, ddbLite: sql3Conn[1]}
+	r := &SymbolsDB{
+		db: db, dbLite: sql3Conn[0],
+		ddb: ddb, ddbLite: sql3Conn[1],
+	}
 
 	// init DB
 
@@ -209,77 +204,7 @@ func OpenSymbolsDB(path string) *SymbolsDB {
 
 	go r.flusher()
 
-	// DB inserts
-
-	r.insertFile, err = db.Prepare(`
-        INSERT INTO files(path, file_info) VALUES (?, ?);
-	`)
-	if err != nil {
-		log.Fatal("prepare insert files ", err)
-	}
-
-	r.insertSymb, err = db.Prepare(`
-        INSERT OR IGNORE INTO symbol_decls(name, unisr, file, line, col, param)
-            SELECT ?, ?, id, ?, ?, ? FROM files
-            WHERE path = ?;
-	`)
-	if err != nil {
-		log.Fatal("prepare insert symbol ", err)
-	}
-
-	r.insertFuncDef, err = db.Prepare(`
-        INSERT OR IGNORE INTO symbol_decls(name, unisr, file, line, col, def)
-            SELECT ?, ?, id, ?, ?, 1 FROM files
-            WHERE path = ?;
-	`)
-	if err != nil {
-		log.Fatal("prepare insert func def ", err)
-	}
-
-	r.insertFuncDecDef, err = db.Prepare(`
-        INSERT OR IGNORE INTO func_decs_defs
-            SELECT f1.id, ?, ?, f2.id, ?, ? FROM files f1, files f2
-            WHERE f1.path = ? AND f2.path = ?;
-	`)
-	if err != nil {
-		log.Fatal("prepare insert func dec/def ", err)
-	}
-
-	r.insertSymbUse, err = db.Prepare(`
-        INSERT OR IGNORE INTO symbol_uses
-            SELECT 0, f1.id, ?, ?, f2.id, ?, ? FROM files f1, files f2
-                WHERE f1.path = ? AND f2.path = ?;
-	`)
-	if err != nil {
-		log.Fatal("preapre insert symbol use ", err)
-	}
-
-	r.insertFuncCall, err = db.Prepare(`
-        INSERT OR REPLACE INTO symbol_uses
-            SELECT 1, f1.id, ?, ?, f2.id, ?, ? FROM files f1, files f2
-                WHERE f1.path = ? AND f2.path = ?;
-	`)
-	if err != nil {
-		log.Fatal("preapre insert func call ", err)
-	}
-
-	// DB (only) delete
-
-	r.delFileRef, err = db.Prepare(`
-        DELETE FROM files WHERE path = ?;
-	`)
-	if err != nil {
-		log.Fatal("prepare delete file ", err)
-	}
-
 	// DB selects
-
-	r.selectFileInfo, err = db.Prepare(`
-        SELECT file_info FROM files WHERE path = ?;
-	`)
-	if err != nil {
-		log.Fatal("prepare select hash ", err)
-	}
 
 	r.selectSymbDecl, err = db.Prepare(`
         SELECT st.name, st.unisr, f2.path, st.line, st.col
@@ -319,40 +244,6 @@ func OpenSymbolsDB(path string) *SymbolsDB {
 	}
 
 	return r
-}
-
-func (db *SymbolsDB) InsertFuncCall(call, dec *Symbol) {
-	_, err := db.insertFuncCall.Exec(call.Line, call.Col,
-		dec.Line, dec.Col,
-		call.File, dec.File)
-	if err != nil {
-		log.Fatal("insert func call ", err)
-	}
-}
-
-func (db *SymbolsDB) InsertSymbolUse(use, dec *Symbol) {
-	_, err := db.insertSymbUse.Exec(use.Line, use.Col,
-		dec.Line, dec.Col,
-		use.File, dec.File)
-	if err != nil {
-		log.Fatal("insert symbol user ", err)
-	}
-}
-
-func (db *SymbolsDB) InsertSymbol(sym *Symbol) {
-	_, err := db.insertSymb.Exec(sym.Name, sym.Unisr,
-		sym.Line, sym.Col, false, sym.File)
-	if err != nil {
-		log.Fatal("insert symbol ", err)
-	}
-}
-
-func (db *SymbolsDB) InsertParamDecl(sym *Symbol) {
-	_, err := db.insertSymb.Exec(sym.Name, sym.Unisr,
-		sym.Line, sym.Col, true, sym.File)
-	if err != nil {
-		log.Fatal("insert symbol param ", err)
-	}
 }
 
 func (db *SymbolsDB) GetSymbolDecl(use *Symbol) *Symbol {
@@ -397,6 +288,179 @@ func (db *SymbolsDB) GetSymbolUses(use *Symbol) []*Symbol {
 	return ret
 }
 
+func (db *SymbolsDB) GetSetFilesInDB() map[string]bool {
+	rows, err := db.db.Query(`SELECT path FROM files;`)
+	if err != nil {
+		log.Fatal("select files ", err)
+	}
+	defer rows.Close()
+
+	fileSet := map[string]bool{}
+	for rows.Next() {
+		var path string
+
+		err := rows.Scan(&path)
+		if err != nil {
+			log.Fatal("scan path ", err)
+		}
+
+		fileSet[path] = true
+	}
+
+	return fileSet
+}
+
+func (db *SymbolsDB) Close() {
+	db.selectSymbDecl.Close()
+	db.selectSymbUses.Close()
+
+	close(db.flush)
+	db.wg.Wait()
+
+	db.ddb.Close()
+	db.db.Close()
+}
+
+/*
+ * Transactions will be used to modify the database. This include inserting
+ * indexing info while parsing a file and deleting a file reference when no
+ * longer exists. To modify the DB, a transaction should first be created and
+ * once all the modifications are don, the trasaction should be closed.
+ */
+
+type SymbolsTx struct {
+	tx *sql.Tx
+	db *SymbolsDB
+
+	selectFileInfo *sql.Stmt
+
+	insertFile       *sql.Stmt
+	insertSymb       *sql.Stmt
+	insertFuncDef    *sql.Stmt
+	insertFuncDecDef *sql.Stmt
+	insertSymbUse    *sql.Stmt
+	insertFuncCall   *sql.Stmt
+
+	delFileRef *sql.Stmt
+}
+
+func (db *SymbolsDB) BeginTx() *SymbolsTx {
+	tx, err := db.db.Begin()
+	if err != nil {
+		log.Fatal("begin transaction ", err)
+	}
+
+	r := &SymbolsTx{db: db, tx: tx}
+
+	// DB selects
+
+	r.selectFileInfo, err = tx.Prepare(`
+        SELECT file_info FROM files WHERE path = ?;
+	`)
+	if err != nil {
+		log.Fatal("prepare select hash ", err)
+	}
+
+	// DB inserts
+
+	r.insertFile, err = tx.Prepare(`
+        INSERT INTO files(path, file_info) VALUES (?, ?);
+	`)
+	if err != nil {
+		log.Fatal("prepare insert files ", err)
+	}
+
+	r.insertSymb, err = tx.Prepare(`
+        INSERT OR IGNORE INTO symbol_decls(name, unisr, file, line, col, param)
+            SELECT ?, ?, id, ?, ?, ? FROM files
+            WHERE path = ?;
+	`)
+	if err != nil {
+		log.Fatal("prepare insert symbol ", err)
+	}
+
+	r.insertFuncDef, err = tx.Prepare(`
+        INSERT OR IGNORE INTO symbol_decls(name, unisr, file, line, col, def)
+            SELECT ?, ?, id, ?, ?, 1 FROM files
+            WHERE path = ?;
+	`)
+	if err != nil {
+		log.Fatal("prepare insert func def ", err)
+	}
+
+	r.insertFuncDecDef, err = tx.Prepare(`
+        INSERT OR IGNORE INTO func_decs_defs
+            SELECT f1.id, ?, ?, f2.id, ?, ? FROM files f1, files f2
+            WHERE f1.path = ? AND f2.path = ?;
+	`)
+	if err != nil {
+		log.Fatal("prepare insert func dec/def ", err)
+	}
+
+	r.insertSymbUse, err = tx.Prepare(`
+        INSERT OR IGNORE INTO symbol_uses
+            SELECT 0, f1.id, ?, ?, f2.id, ?, ? FROM files f1, files f2
+                WHERE f1.path = ? AND f2.path = ?;
+	`)
+	if err != nil {
+		log.Fatal("preapre insert symbol use ", err)
+	}
+
+	r.insertFuncCall, err = tx.Prepare(`
+        INSERT OR REPLACE INTO symbol_uses
+            SELECT 1, f1.id, ?, ?, f2.id, ?, ? FROM files f1, files f2
+                WHERE f1.path = ? AND f2.path = ?;
+	`)
+	if err != nil {
+		log.Fatal("preapre insert func call ", err)
+	}
+
+	// DB (only) delete
+
+	r.delFileRef, err = tx.Prepare(`
+        DELETE FROM files WHERE path = ?;
+	`)
+	if err != nil {
+		log.Fatal("prepare delete file ", err)
+	}
+
+	return r
+}
+
+func (tx *SymbolsTx) InsertSymbol(sym *Symbol) {
+	_, err := tx.insertSymb.Exec(sym.Name, sym.Unisr,
+		sym.Line, sym.Col, false, sym.File)
+	if err != nil {
+		log.Fatal("insert symbol ", err)
+	}
+}
+
+func (tx *SymbolsTx) InsertParamDecl(sym *Symbol) {
+	_, err := tx.insertSymb.Exec(sym.Name, sym.Unisr,
+		sym.Line, sym.Col, true, sym.File)
+	if err != nil {
+		log.Fatal("insert symbol param ", err)
+	}
+}
+
+func (tx *SymbolsTx) InsertSymbolUse(use, dec *Symbol) {
+	_, err := tx.insertSymbUse.Exec(use.Line, use.Col,
+		dec.Line, dec.Col,
+		use.File, dec.File)
+	if err != nil {
+		log.Fatal("insert symbol user ", err)
+	}
+}
+
+func (tx *SymbolsTx) InsertFuncCall(call, dec *Symbol) {
+	_, err := tx.insertFuncCall.Exec(call.Line, call.Col,
+		dec.Line, dec.Col,
+		call.File, dec.File)
+	if err != nil {
+		log.Fatal("insert func call ", err, call, dec)
+	}
+}
+
 func getFileInfoBytes(fi os.FileInfo) []byte {
 	timeBytes, err := fi.ModTime().MarshalBinary()
 	if err != nil {
@@ -426,26 +490,20 @@ func getFileInfoBytes(fi os.FileInfo) []byte {
 	return buf.Bytes()
 }
 
-func (db *SymbolsDB) getFileInfoBytesDB(file string) (bool, []byte) {
-	r, err := db.selectFileInfo.Query(file)
-	if err != nil {
-		log.Fatal("select file info ", err)
-	}
-	defer r.Close()
+func (tx *SymbolsTx) getFileInfoBytesDB(file string) (bool, []byte) {
+	var inDbFileInfo []byte
 
-	if r.Next() {
-		var inDbFileInfo []byte
-
-		err := r.Scan(&inDbFileInfo)
-		if err != nil {
-			log.Fatal("scanning file info ", err)
-		}
-
-		return true, inDbFileInfo
-	} else {
+	err := tx.selectFileInfo.QueryRow(file).Scan(&inDbFileInfo)
+	switch {
+	case err == sql.ErrNoRows:
 		return false, nil
+	case err != nil:
+		log.Fatal("scanning file info ", err)
+	default:
+		return true, inDbFileInfo
 	}
 
+	return false, nil // not necessary but compiler complains
 }
 
 /*
@@ -454,16 +512,16 @@ func (db *SymbolsDB) getFileInfoBytesDB(file string) (bool, []byte) {
  * In either case, it will insert a new file entry in the DB and the Parser
  * should be called to populate the DB with the new symbols.
  */
-func (db *SymbolsDB) NeedToProcessFile(file string) bool {
+func (tx *SymbolsTx) NeedToProcessFile(file string) bool {
 	fi, err := os.Stat(file)
 	if err != nil {
 		log.Println(err, ": unable to read file ", file)
-		db.RemoveFileReferences(file)
+		tx.RemoveFileReferences(file)
 		return false
 	}
 
 	fiBytes := getFileInfoBytes(fi)
-	exist, inDbFiBytes := db.getFileInfoBytesDB(file)
+	exist, inDbFiBytes := tx.getFileInfoBytesDB(file)
 
 	if exist {
 		if bytes.Compare(fiBytes, inDbFiBytes) == 0 {
@@ -471,11 +529,11 @@ func (db *SymbolsDB) NeedToProcessFile(file string) bool {
 			return false
 		} else {
 			// not up to date, remove all references
-			db.RemoveFileReferences(file)
+			tx.RemoveFileReferences(file)
 		}
 	}
 
-	_, err = db.insertFile.Exec(file, fiBytes)
+	_, err = tx.insertFile.Exec(file, fiBytes)
 	if err != nil {
 		sqliteErr := err.(sqlite.Error)
 		if sqliteErr.ExtendedCode == sqlite.ErrConstraintUnique {
@@ -489,79 +547,47 @@ func (db *SymbolsDB) NeedToProcessFile(file string) bool {
 	return true
 }
 
-func (db *SymbolsDB) RemoveFileReferences(file string) {
-	_, err := db.delFileRef.Exec(file)
+func (tx *SymbolsTx) RemoveFileReferences(file string) {
+	_, err := tx.delFileRef.Exec(file)
 	if err != nil {
 		log.Fatal("delete file ", err)
 	}
 }
 
-func (db *SymbolsDB) GetSetFilesInDB() map[string]bool {
-	rows, err := db.db.Query(`SELECT path FROM files;`)
-	if err != nil {
-		log.Fatal("select files ", err)
-	}
-	defer rows.Close()
-
-	fileSet := map[string]bool{}
-	for rows.Next() {
-		var path string
-
-		err := rows.Scan(&path)
-		if err != nil {
-			log.Fatal("scan path ", err)
-		}
-
-		fileSet[path] = true
-	}
-
-	return fileSet
-}
-
-func (db *SymbolsDB) InsertFuncDef(def *Symbol) {
+func (tx *SymbolsTx) InsertFuncDef(def *Symbol) {
 	// insert function definition. Ignore if already exists.
-	_, err := db.insertFuncDef.Exec(def.Name, def.Unisr,
-		def.Line, def.Col, def.File)
+	_, err := tx.insertFuncDef.Exec(def.Name, def.Unisr, def.Line, def.Col,
+		def.File)
 	if err != nil {
 		log.Fatal("insert func def ", err)
 	}
 }
 
-func (db *SymbolsDB) InsertFuncSymb(dec, def *Symbol) {
-	db.db.Query(`BEGIN TRANSACTION;`)
-
-	db.InsertFuncDef(def)
-	db.InsertSymbol(dec)
+func (tx *SymbolsTx) InsertFuncSymb(dec, def *Symbol) {
+	tx.InsertFuncDef(def)
+	tx.InsertSymbol(dec)
 
 	// point this declaration to its definition
-	_, err := db.insertFuncDecDef.Exec(
+	_, err := tx.insertFuncDecDef.Exec(
 		dec.Line, dec.Col,
 		def.Line, def.Col,
 		dec.File, def.File)
 	if err != nil {
 		log.Fatal("insert func dec to def ", err)
 	}
-
-	db.db.Query(`COMMIT TRANSACTION;`)
 }
 
-func (db *SymbolsDB) Close() {
-	db.insertFile.Close()
-	db.insertSymb.Close()
-	db.insertFuncDef.Close()
-	db.insertFuncDecDef.Close()
-	db.insertSymbUse.Close()
-	db.insertFuncCall.Close()
+func (tx *SymbolsTx) Close() {
+	tx.selectFileInfo.Close()
 
-	db.delFileRef.Close()
+	tx.insertFile.Close()
+	tx.insertSymb.Close()
+	tx.insertFuncDef.Close()
+	tx.insertFuncDecDef.Close()
+	tx.insertSymbUse.Close()
+	tx.insertFuncCall.Close()
 
-	db.selectFileInfo.Close()
-	db.selectSymbDecl.Close()
-	db.selectSymbUses.Close()
+	tx.delFileRef.Close()
 
-	close(db.flush)
-	db.wg.Wait()
-
-	db.ddb.Close()
-	db.db.Close()
+	tx.tx.Commit()
 }
