@@ -143,7 +143,9 @@ func (db *SymbolsDB) flusher() {
 		select {
 		case <-db.ticker:
 			// if this takes too long, we need to flush piece-wise
-			copyDb(db.dbLite, db.ddbLite)
+			// TODO: This needs to create a DB connection every
+			// time it is used
+			// copyDb(db.dbLite, db.ddbLite)
 		case _, ok := <-db.flush:
 			copyDb(db.dbLite, db.ddbLite)
 			if !ok {
@@ -448,7 +450,13 @@ func (tx *SymbolsTx) InsertSymbolUse(use, dec *Symbol) {
 		dec.Line, dec.Col,
 		use.File, dec.File)
 	if err != nil {
-		log.Fatal("insert symbol user ", err)
+		sqliteErr := err.(sqlite.Error)
+		if sqliteErr.ExtendedCode == sqlite.ErrConstraintForeignKey {
+			// If the symbol is not declared, ignore.
+			//log.Println("use with no declaration ", use.Name, " ignoring")
+		} else {
+			log.Fatal("insert symbol user ", err)
+		}
 	}
 }
 
@@ -457,7 +465,13 @@ func (tx *SymbolsTx) InsertFuncCall(call, dec *Symbol) {
 		dec.Line, dec.Col,
 		call.File, dec.File)
 	if err != nil {
-		log.Fatal("insert func call ", err, call, dec)
+		sqliteErr := err.(sqlite.Error)
+		if sqliteErr.ExtendedCode == sqlite.ErrConstraintForeignKey {
+			// If the symbol is not declared, ignore.
+			//log.Println("call with no declaration ", call.Name, " ignoring")
+		} else {
+			log.Fatal("insert func call ", err)
+		}
 	}
 }
 
