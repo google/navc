@@ -53,7 +53,7 @@ func (db *SymbolsDB) empty() bool {
 	rows, err := db.db.Query(`SELECT name FROM sqlite_master
                             WHERE type='table' AND name='files';`)
 	if err != nil {
-		log.Fatal("check empty ", err)
+		log.Panic("check empty ", err)
 	}
 	defer rows.Close()
 
@@ -118,7 +118,7 @@ func (db *SymbolsDB) initDB() {
 	`
 	_, err := db.db.Exec(initStmt)
 	if err != nil {
-		log.Fatal("init db ", err)
+		log.Panic("init db ", err)
 	}
 }
 
@@ -179,13 +179,13 @@ func OpenSymbolsDB(path string) *SymbolsDB {
 
 	db, err := sql.Open("sqlite3_conn_catch", "file::memory:?cache=shared")
 	if err != nil {
-		log.Fatal("open db ", err)
+		log.Panic("open db ", err)
 	}
 	db.Ping()
 
 	ddb, err := sql.Open("sqlite3_conn_catch", path)
 	if err != nil {
-		log.Fatal("open ddb ", err)
+		log.Panic("open ddb ", err)
 	}
 	ddb.Ping()
 
@@ -224,7 +224,7 @@ func OpenSymbolsDB(path string) *SymbolsDB {
                 f1.path = ? AND su.line = ? AND su.col = ?;
 	`)
 	if err != nil {
-		log.Fatal("prepare select symbol ", err)
+		log.Panic("prepare select symbol ", err)
 	}
 
 	r.selectSymbUses, err = db.Prepare(`
@@ -242,7 +242,7 @@ func OpenSymbolsDB(path string) *SymbolsDB {
                 f1.path = ? AND su1.line = ? AND su1.col = ?;
 	`)
 	if err != nil {
-		log.Fatal("prepare select symbol uses ", err)
+		log.Panic("prepare select symbol uses ", err)
 	}
 
 	return r
@@ -251,7 +251,7 @@ func OpenSymbolsDB(path string) *SymbolsDB {
 func (db *SymbolsDB) GetSymbolDecl(use *Symbol) *Symbol {
 	r, err := db.selectSymbDecl.Query(use.File, use.Line, use.Col)
 	if err != nil {
-		log.Fatal("select symbol decl ", err)
+		log.Panic("select symbol decl ", err)
 	}
 	defer r.Close()
 
@@ -260,7 +260,7 @@ func (db *SymbolsDB) GetSymbolDecl(use *Symbol) *Symbol {
 
 		err = r.Scan(&s.Name, &s.Unisr, &s.File, &s.Line, &s.Col)
 		if err != nil {
-			log.Fatal("scan symbol ", err)
+			log.Panic("scan symbol ", err)
 		}
 
 		return s
@@ -272,7 +272,7 @@ func (db *SymbolsDB) GetSymbolDecl(use *Symbol) *Symbol {
 func (db *SymbolsDB) GetSymbolUses(use *Symbol) []*Symbol {
 	r, err := db.selectSymbUses.Query(use.File, use.Line, use.Col)
 	if err != nil {
-		log.Fatal("select symbol uses ", err)
+		log.Panic("select symbol uses ", err)
 	}
 	defer r.Close()
 
@@ -282,7 +282,7 @@ func (db *SymbolsDB) GetSymbolUses(use *Symbol) []*Symbol {
 
 		err = r.Scan(&s.File, &s.Line, &s.Col)
 		if err != nil {
-			log.Fatal("scan symbol ", err)
+			log.Panic("scan symbol ", err)
 		}
 
 		ret = append(ret, s)
@@ -293,7 +293,7 @@ func (db *SymbolsDB) GetSymbolUses(use *Symbol) []*Symbol {
 func (db *SymbolsDB) GetSetFilesInDB() map[string]bool {
 	rows, err := db.db.Query(`SELECT path FROM files;`)
 	if err != nil {
-		log.Fatal("select files ", err)
+		log.Panic("select files ", err)
 	}
 	defer rows.Close()
 
@@ -303,7 +303,7 @@ func (db *SymbolsDB) GetSetFilesInDB() map[string]bool {
 
 		err := rows.Scan(&path)
 		if err != nil {
-			log.Fatal("scan path ", err)
+			log.Panic("scan path ", err)
 		}
 
 		fileSet[path] = true
@@ -349,7 +349,7 @@ type SymbolsTx struct {
 func (db *SymbolsDB) BeginTx() *SymbolsTx {
 	tx, err := db.db.Begin()
 	if err != nil {
-		log.Fatal("begin transaction ", err)
+		log.Panic("begin transaction ", err)
 	}
 
 	r := &SymbolsTx{db: db, tx: tx}
@@ -360,7 +360,7 @@ func (db *SymbolsDB) BeginTx() *SymbolsTx {
         SELECT file_info FROM files WHERE path = ?;
 	`)
 	if err != nil {
-		log.Fatal("prepare select hash ", err)
+		log.Panic("prepare select hash ", err)
 	}
 
 	// DB inserts
@@ -369,7 +369,7 @@ func (db *SymbolsDB) BeginTx() *SymbolsTx {
         INSERT INTO files(path, file_info) VALUES (?, ?);
 	`)
 	if err != nil {
-		log.Fatal("prepare insert files ", err)
+		log.Panic("prepare insert files ", err)
 	}
 
 	r.insertSymb, err = tx.Prepare(`
@@ -378,7 +378,7 @@ func (db *SymbolsDB) BeginTx() *SymbolsTx {
             WHERE path = ?;
 	`)
 	if err != nil {
-		log.Fatal("prepare insert symbol ", err)
+		log.Panic("prepare insert symbol ", err)
 	}
 
 	r.insertFuncDef, err = tx.Prepare(`
@@ -387,7 +387,7 @@ func (db *SymbolsDB) BeginTx() *SymbolsTx {
             WHERE path = ?;
 	`)
 	if err != nil {
-		log.Fatal("prepare insert func def ", err)
+		log.Panic("prepare insert func def ", err)
 	}
 
 	r.insertFuncDecDef, err = tx.Prepare(`
@@ -396,7 +396,7 @@ func (db *SymbolsDB) BeginTx() *SymbolsTx {
             WHERE f1.path = ? AND f2.path = ?;
 	`)
 	if err != nil {
-		log.Fatal("prepare insert func dec/def ", err)
+		log.Panic("prepare insert func dec/def ", err)
 	}
 
 	r.insertSymbUse, err = tx.Prepare(`
@@ -405,7 +405,7 @@ func (db *SymbolsDB) BeginTx() *SymbolsTx {
                 WHERE f1.path = ? AND f2.path = ?;
 	`)
 	if err != nil {
-		log.Fatal("preapre insert symbol use ", err)
+		log.Panic("preapre insert symbol use ", err)
 	}
 
 	r.insertFuncCall, err = tx.Prepare(`
@@ -414,7 +414,7 @@ func (db *SymbolsDB) BeginTx() *SymbolsTx {
                 WHERE f1.path = ? AND f2.path = ?;
 	`)
 	if err != nil {
-		log.Fatal("preapre insert func call ", err)
+		log.Panic("preapre insert func call ", err)
 	}
 
 	// DB (only) delete
@@ -423,7 +423,7 @@ func (db *SymbolsDB) BeginTx() *SymbolsTx {
         DELETE FROM files WHERE path = ?;
 	`)
 	if err != nil {
-		log.Fatal("prepare delete file ", err)
+		log.Panic("prepare delete file ", err)
 	}
 
 	return r
@@ -433,7 +433,7 @@ func (tx *SymbolsTx) InsertSymbol(sym *Symbol) {
 	_, err := tx.insertSymb.Exec(sym.Name, sym.Unisr,
 		sym.Line, sym.Col, false, sym.File)
 	if err != nil {
-		log.Fatal("insert symbol ", err)
+		log.Panic("insert symbol ", err)
 	}
 }
 
@@ -441,7 +441,7 @@ func (tx *SymbolsTx) InsertParamDecl(sym *Symbol) {
 	_, err := tx.insertSymb.Exec(sym.Name, sym.Unisr,
 		sym.Line, sym.Col, true, sym.File)
 	if err != nil {
-		log.Fatal("insert symbol param ", err)
+		log.Panic("insert symbol param ", err)
 	}
 }
 
@@ -455,7 +455,7 @@ func (tx *SymbolsTx) InsertSymbolUse(use, dec *Symbol) {
 			// If the symbol is not declared, ignore.
 			//log.Println("use with no declaration ", use.Name, " ignoring")
 		} else {
-			log.Fatal("insert symbol user ", err)
+			log.Panic("insert symbol user ", err)
 		}
 	}
 }
@@ -470,7 +470,7 @@ func (tx *SymbolsTx) InsertFuncCall(call, dec *Symbol) {
 			// If the symbol is not declared, ignore.
 			//log.Println("call with no declaration ", call.Name, " ignoring")
 		} else {
-			log.Fatal("insert func call ", err)
+			log.Panic("insert func call ", err)
 		}
 	}
 }
@@ -478,7 +478,7 @@ func (tx *SymbolsTx) InsertFuncCall(call, dec *Symbol) {
 func getFileInfoBytes(fi os.FileInfo) []byte {
 	timeBytes, err := fi.ModTime().MarshalBinary()
 	if err != nil {
-		log.Fatal("time to bytes ", err)
+		log.Panic("time to bytes ", err)
 	}
 
 	var dir byte
@@ -512,7 +512,7 @@ func (tx *SymbolsTx) getFileInfoBytesDB(file string) (bool, []byte) {
 	case err == sql.ErrNoRows:
 		return false, nil
 	case err != nil:
-		log.Fatal("scanning file info ", err)
+		log.Panic("scanning file info ", err)
 	default:
 		return true, inDbFileInfo
 	}
@@ -554,7 +554,7 @@ func (tx *SymbolsTx) NeedToProcessFile(file string) bool {
 			// two threads tried to add the same file, fail the second one
 			return false
 		} else {
-			log.Fatal("insert file ", err)
+			log.Panic("insert file ", err)
 		}
 	}
 
@@ -564,7 +564,7 @@ func (tx *SymbolsTx) NeedToProcessFile(file string) bool {
 func (tx *SymbolsTx) RemoveFileReferences(file string) {
 	_, err := tx.delFileRef.Exec(file)
 	if err != nil {
-		log.Fatal("delete file ", err)
+		log.Panic("delete file ", err)
 	}
 }
 
@@ -573,7 +573,7 @@ func (tx *SymbolsTx) InsertFuncDef(def *Symbol) {
 	_, err := tx.insertFuncDef.Exec(def.Name, def.Unisr, def.Line, def.Col,
 		def.File)
 	if err != nil {
-		log.Fatal("insert func def ", err)
+		log.Panic("insert func def ", err)
 	}
 }
 
@@ -587,7 +587,7 @@ func (tx *SymbolsTx) InsertFuncSymb(dec, def *Symbol) {
 		def.Line, def.Col,
 		dec.File, def.File)
 	if err != nil {
-		log.Fatal("insert func dec to def ", err)
+		log.Panic("insert func dec to def ", err)
 	}
 }
 

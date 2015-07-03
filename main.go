@@ -26,6 +26,7 @@
 package main
 
 import (
+	"container/list"
 	"flag"
 	fsnotify "gopkg.in/fsnotify.v1"
 	"log"
@@ -51,64 +52,59 @@ func processFile(files chan string, wg *sync.WaitGroup, db *SymbolsDB) {
 			return
 		}
 
-		log.Println("exploring", file)
+		log.Println("parsing", file)
 		Parse(file, db)
 	}
 }
 
 func explorePathToParse(path string,
 	visitDir func(string),
-	visitC func(string)) {
+	visitC func(string)) *list.List {
+
 	path = filepath.Clean(path)
-	toExplore := []string{path}
-	for len(toExplore) > 0 {
-		// dequeue first path
-		path := toExplore[0]
-		toExplore = toExplore[1:]
 
-		f, err := os.Open(path)
-		if err != nil {
-			log.Println(err, "opening", path, ", ignoring")
-			continue
-		}
-
-		info, err := f.Stat()
-		if err != nil {
-			log.Println(err, "stating", path, ", ignoring")
-			continue
-		}
-
-		// visit file
-		if !info.IsDir() {
-			// ignore non-C files
-			validC, _ := regexp.MatchString(`.*\.[ch]$`, path)
-			if validC {
-				visitC(path)
-			}
-			continue
-		} else {
-			visitDir(path)
-		}
-
-		// add all the files in the directory to explore
-		dirFiles, err := f.Readdir(0)
-		if err != nil {
-			log.Println(err, " readdir ", path, ", ignoring")
-			continue
-		}
-
-		for _, subf := range dirFiles {
-			// ignore hidden files
-			if subf.Name()[0] == '.' {
-				continue
-			}
-
-			relPath := path + "/" + subf.Name()
-			relPath = filepath.Clean(relPath)
-
-			toExplore = append(toExplore, relPath)
-		}
+	f, err := os.Open(path)
+	if err != nil {
+		log.Println(err, "opening", path, ", ignoring")
+		return nil
 	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		log.Println(err, "stating", path, ", ignoring")
+		return nil
+	}
+
+	// visit file
+	if !info.IsDir() {
+		// ignore non-C files
+		validC, _ := regexp.MatchString(`.*\.[ch]$`, path)
+		if validC {
+			visitC(path)
+		}
+		return nil
+	} else {
+		visitDir(path)
+	}
+
+	// add all the files in the directory to explore
+	dirFiles, err := f.Readdir(0)
+	if err != nil {
+		log.Println(err, " readdir ", path, ", ignoring")
+		return nil
+	}
+
+	toExplore := list.New()
+	for _, subf := range dirFiles {
+		// ignore hidden files
+		if subf.Name()[0] == '.' {
+			continue
+		}
+
+		toExplore.PushBack(path + "/" + subf.Name())
+	}
+	return toExplore
 }
 
 func handleChange(event fsnotify.Event,
@@ -168,6 +164,7 @@ func main() {
 	// handle interrup and kill signals
 	intr := make(chan os.Signal, 1)
 	signal.Notify(intr, os.Interrupt, os.Kill)
+	defer close(intr)
 
 	var wg sync.WaitGroup
 	defer wg.Wait()
@@ -228,8 +225,22 @@ func main() {
 		// put file in channel
 		files <- path
 	}
+	toExplore := list.New()
 	for _, path := range indexDir {
-		explorePathToParse(path, visitorDir, visitorC)
+		toExplore.PushBack(path)
+	}
+	for toExplore.Len() > 0 {
+		// dequeue first path
+		path := toExplore.Front()
+		toExplore.Remove(path)
+
+		newDirs := explorePathToParse(
+			path.Value.(string),
+			visitorDir,
+			visitorC)
+		if newDirs != nil {
+			toExplore.PushBackList(newDirs)
+		}
 	}
 
 	// remove from DB deleted files
