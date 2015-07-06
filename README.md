@@ -37,10 +37,12 @@ TODO
   shutdown is enough.
 * We need to introduce the dependency between files so that all the dependents
   get updated as soon as a file changes.
+* We are not including the right header directories missing a lot of the symbol
+  declarations. We can use the JSON compilation database in clang
+  (http://clang.llvm.org/docs/JSONCompilationDatabase.html). This can be
+  generated with CMake if used or bear otherwise.
 * Find a way to parse files in parallel either by concurrently writing to the
   DB or have a map/reduce kind of format where map=parse, reduce=insert in DB.
-* There are plenty of symbols without declaration we are ignoring. Find out why
-  they don't have declaration and make a fix.
 * Complete vim plugin for use.
 * Have better logging and not log everything. In particular, it would be nice
   to have a progress bar while indexing code at start up.
