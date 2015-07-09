@@ -140,7 +140,7 @@ func NewParser(db *SymbolsDB, inputDirs []string) *Parser {
 	// read compilation args db and fix files paths
 	for _, path := range inputDirs {
 		f, err := os.Open(path + "/compile_commands.json")
-		if err == os.ErrNotExist {
+		if os.IsNotExist(err) {
 			continue
 		} else if err != nil {
 			log.Panic("error opening compile db: ", err)
