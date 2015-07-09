@@ -17,9 +17,44 @@
 package main
 
 import (
-	"fmt"
+	"encoding/json"
 	"github.com/sbinet/go-clang"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
 )
+
+type Parser struct {
+	db *SymbolsDB
+
+	cas map[string][]string
+}
+
+/*
+ * There is so much path manipulation in the construction of the compilation
+ * aguments database that I think this deserves a long explanation. Compilation
+ * database (compile_command.json) provides absolute path of the file with its
+ * compilation options. We are storing this compilation options/arguments in
+ * the cas field of the Parser struct to be used during parsing. This is a map
+ * of file name to list of arguments. The name file should match the one
+ * returned by the directory traversing in main, i.e., the minimum relative
+ * path of the file (the path returned by filepath.Clean). For each input
+ * directory (provided in the command line) we try to read the compile command
+ * database from disk. For each of the file path read, we replace the full path
+ * prefix with the directory given as input (fixPaths) and clean it with
+ * filepath.Clean.
+ *
+ * Then, we need to make sure that the directories in the -I options have the
+ * right path from our working directoy. This is fixed in fixCompDirArg right
+ * before populating the arguments for some specific file.
+ */
+
+type compArgs struct {
+	Directory string
+	Command   string
+	File      string
+}
 
 func getSymbolFromCursor(cursor *clang.Cursor) *Symbol {
 	f, line, col, _ := cursor.Location().GetFileLocation()
@@ -27,8 +62,92 @@ func getSymbolFromCursor(cursor *clang.Cursor) *Symbol {
 	return &Symbol{cursor.Spelling(), cursor.USR(), fName, int(line), int(col)}
 }
 
-func Parse(file string, db *SymbolsDB) {
-	tx := db.BeginTx()
+func fixPaths(cas []compArgs, path string) {
+	// first, find absolute path of @path
+	var abs string
+	if filepath.IsAbs(path) {
+		abs = path
+	} else {
+		wd, err := os.Getwd()
+		if err != nil {
+			log.Panic("unable to get working directoy: ", err)
+		}
+		abs = filepath.Clean(wd + "/" + path)
+	}
+
+	// second, replace absolute path with relative path and clean
+	for i, _ := range cas {
+		ca := &cas[i]
+		ca.File = filepath.Clean(strings.Replace(ca.File, abs, path, 1))
+	}
+}
+
+func fixCompDirArg(argDir, path string) string {
+	if filepath.IsAbs(argDir) {
+		return argDir
+	} else {
+		return filepath.Clean(path + "/" + argDir)
+	}
+}
+
+func getCompArgs(command, path string) []string {
+	args := []string{}
+
+	argsList := strings.Fields(command)
+
+	for i, arg := range argsList {
+		switch {
+		case arg == "-D":
+			args = append(args, arg, argsList[i+1])
+		case strings.HasPrefix(arg, "-D"):
+			args = append(args, arg)
+		case arg == "-I":
+			argDir := fixCompDirArg(argsList[i+1], path)
+			args = append(args, "-I", argDir)
+		case strings.HasPrefix(arg, "-I"):
+			argDir := fixCompDirArg(
+				strings.Replace(arg, "-I", "", 1),
+				path)
+			args = append(args, "-I", argDir)
+		}
+	}
+
+	return args
+}
+
+func NewParser(db *SymbolsDB, inputDirs []string) *Parser {
+	ret := &Parser{db, make(map[string][]string)}
+
+	// read compilation args db and fix files paths
+	for _, path := range inputDirs {
+		f, err := os.Open(path + "/compile_commands.json")
+		if err == os.ErrNotExist {
+			continue
+		} else if err != nil {
+			log.Panic("error opening compile db: ", err)
+		}
+		defer f.Close()
+
+		dec := json.NewDecoder(f)
+		var cas []compArgs
+		err = dec.Decode(&cas)
+		if err != nil {
+			log.Panic(err)
+		}
+
+		fixPaths(cas, path)
+
+		// index compArgs by file names
+		for _, ca := range cas {
+			ret.cas[ca.File] = getCompArgs(ca.Command, path)
+		}
+	}
+
+	return ret
+}
+
+func (pa *Parser) Parse(file string) {
+	tx := pa.db.BeginTx()
 	defer tx.Close()
 
 	if !tx.NeedToProcessFile(file) {
@@ -42,8 +161,10 @@ func Parse(file string, db *SymbolsDB) {
 	idx := clang.NewIndex(0, 0)
 	defer idx.Dispose()
 
-	args := []string{}
-
+	args, ok := pa.cas[file]
+	if !ok {
+		args = []string{}
+	}
 	tu := idx.Parse(file, args, nil, clang.TU_DetailedPreprocessingRecord)
 	defer tu.Dispose()
 
@@ -62,9 +183,9 @@ func Parse(file string, db *SymbolsDB) {
 
 		// TODO: erase! this is not required
 		if false {
-			fmt.Printf("%s: %s (%s)\n",
+			log.Printf("%s: %s (%s)\n",
 				cursor.Kind().Spelling(), cursor.Spelling(), cursor.USR())
-			fmt.Println(fName, ":", line, col)
+			log.Println(fName, ":", line, col)
 		}
 		////////////////////////////////////
 

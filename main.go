@@ -40,7 +40,7 @@ import (
 	"sync"
 )
 
-func processFile(files chan string, wg *sync.WaitGroup, db *SymbolsDB) {
+func processFile(files chan string, wg *sync.WaitGroup, parser *Parser) {
 	wg.Add(1)
 	defer wg.Done()
 
@@ -53,7 +53,7 @@ func processFile(files chan string, wg *sync.WaitGroup, db *SymbolsDB) {
 		}
 
 		log.Println("parsing", file)
-		Parse(file, db)
+		parser.Parse(file)
 	}
 }
 
@@ -179,13 +179,16 @@ func main() {
 	db := OpenSymbolsDB(dbFile)
 	defer db.Close()
 
+	// create parser
+	parser := NewParser(db, indexDir)
+
 	// start indexing threads
 	files := make(chan string, nIndexingThreads)
 	defer close(files)
 
 	// start threads to process files
 	for i := 0; i < nIndexingThreads; i++ {
-		go processFile(files, &wg, db)
+		go processFile(files, &wg, parser)
 	}
 
 	// start file watcher
