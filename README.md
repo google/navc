@@ -42,6 +42,9 @@ TODO
 * Complete vim plugin for use.
 * Have better logging and not log everything. In particular, it would be nice
   to have a progress bar while indexing code at start up.
+* Currently, to update the compile\_commands.json file in memory, the daemon
+  has to be restarted. This can be fixed easily by simply watching all the
+  compile\_commands.json files and update the database in memory if it changed.
 
 DISCLAIMER
 ==========

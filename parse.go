@@ -39,15 +39,15 @@ type Parser struct {
  * the cas field of the Parser struct to be used during parsing. This is a map
  * of file name to list of arguments. The name file should match the one
  * returned by the directory traversing in main, i.e., the minimum relative
- * path of the file (the path returned by filepath.Clean). For each input
- * directory (provided in the command line) we try to read the compile command
- * database from disk. For each of the file path read, we replace the full path
- * prefix with the directory given as input (fixPaths) and clean it with
- * filepath.Clean.
+ * path of the file (the path returned by filepath.Clean) or the absolute path
+ * depending on the input. For each input directory (provided in the command
+ * line) we try to read the compile command database from disk. For each of the
+ * file path read, we fix the full path to match the relative or absolute path
+ * of the input (fixPaths) and clean it with filepath.Clean.
  *
- * Then, we need to make sure that the directories in the -I options have the
- * right path from our working directoy. This is fixed in fixCompDirArg right
- * before populating the arguments for some specific file.
+ * Then, we need to make sure that the directories in the -I options also match
+ * the relative or absolute path from the input. This is fixed in fixCompDirArg
+ * right before populating the arguments for some specific file.
  */
 
 type compArgs struct {
@@ -56,37 +56,56 @@ type compArgs struct {
 	File      string
 }
 
-func getSymbolFromCursor(cursor *clang.Cursor) *Symbol {
-	f, line, col, _ := cursor.Location().GetFileLocation()
-	fName := f.Name()
-	return &Symbol{cursor.Spelling(), cursor.USR(), fName, int(line), int(col)}
-}
-
 func fixPaths(cas []compArgs, path string) {
 	// first, find absolute path of @path
-	var abs string
 	if filepath.IsAbs(path) {
-		abs = path
-	} else {
-		wd, err := os.Getwd()
-		if err != nil {
-			log.Panic("unable to get working directoy: ", err)
-		}
-		abs = filepath.Clean(wd + "/" + path)
+		return
+	}
+
+	wd, err := os.Getwd()
+	if err != nil {
+		log.Panic("unable to get working directoy: ", err)
 	}
 
 	// second, replace absolute path with relative path and clean
 	for i, _ := range cas {
 		ca := &cas[i]
-		ca.File = filepath.Clean(strings.Replace(ca.File, abs, path, 1))
+		rel, err := filepath.Rel(wd, ca.File)
+		if err != nil {
+			log.Panic("unable to get relative path: ", err)
+		}
+		ca.File = filepath.Clean(rel)
 	}
 }
 
 func fixCompDirArg(argDir, path string) string {
-	if filepath.IsAbs(argDir) {
-		return argDir
+	if filepath.IsAbs(path) {
+		if filepath.IsAbs(argDir) {
+			return argDir
+		} else {
+			abs, err := filepath.Abs(argDir)
+			if err != nil {
+				log.Panic("unable to get absolute path: ",
+					err)
+			}
+			return filepath.Clean(abs)
+		}
 	} else {
-		return filepath.Clean(path + "/" + argDir)
+		if filepath.IsAbs(argDir) {
+			wd, err := os.Getwd()
+			if err != nil {
+				log.Panic("unable to get working directoy: ",
+					err)
+			}
+			rel, err := filepath.Rel(wd, argDir)
+			if err != nil {
+				log.Panic("unable to get relative path: ",
+					err)
+			}
+			return filepath.Clean(rel)
+		} else {
+			return filepath.Clean(path + "/" + argDir)
+		}
 	}
 }
 
@@ -144,6 +163,12 @@ func NewParser(db *SymbolsDB, inputDirs []string) *Parser {
 	}
 
 	return ret
+}
+
+func getSymbolFromCursor(cursor *clang.Cursor) *Symbol {
+	f, line, col, _ := cursor.Location().GetFileLocation()
+	fName := f.Name()
+	return &Symbol{cursor.Spelling(), cursor.USR(), fName, int(line), int(col)}
 }
 
 func (pa *Parser) Parse(file string) {

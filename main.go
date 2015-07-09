@@ -79,7 +79,7 @@ func explorePathToParse(path string,
 	// visit file
 	if !info.IsDir() {
 		// ignore non-C files
-		validC, _ := regexp.MatchString(`.*\.[ch]$`, path)
+		validC, _ := regexp.MatchString(`.*\.c$`, path)
 		if validC {
 			visitC(path)
 		}
