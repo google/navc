@@ -107,6 +107,25 @@ func explorePathToParse(path string,
 	return toExplore
 }
 
+func traversePath(path string, visitDir func(string), visitC func(string)) {
+	toExplore := list.New()
+	toExplore.PushBack(path)
+
+	for toExplore.Len() > 0 {
+		// dequeue first path
+		path := toExplore.Front()
+		toExplore.Remove(path)
+
+		newDirs := explorePathToParse(
+			path.Value.(string),
+			visitDir,
+			visitC)
+		if newDirs != nil {
+			toExplore.PushBackList(newDirs)
+		}
+	}
+}
+
 func handleChange(event fsnotify.Event,
 	db *SymbolsDB,
 	watcher *fsnotify.Watcher,
@@ -125,11 +144,11 @@ func handleChange(event fsnotify.Event,
 
 	switch {
 	case event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Chmod) != 0:
-		explorePathToParse(event.Name, visitorDir, visitorC)
+		traversePath(event.Name, visitorDir, visitorC)
 	case event.Op&(fsnotify.Remove|fsnotify.Rename) != 0:
 		watcher.Remove(event.Name)
 		tx := db.BeginTx()
-		tx.RemoveFileReferences(event.Name)
+		tx.RemoveFileReferences(filepath.Clean(event.Name))
 		tx.Close()
 	}
 }
@@ -146,7 +165,8 @@ func main() {
 
 	// reset DB
 	var resetDb bool
-	flag.BoolVar(&resetDb, "resetDb", false, "Reset symbols DB and start over")
+	flag.BoolVar(&resetDb, "resetDb", false,
+		"Reset symbols DB and start over")
 
 	flag.Parse()
 
@@ -172,7 +192,6 @@ func main() {
 	// if we need to reset the database, erase the old one
 	if resetDb {
 		os.Remove(dbFile)
-
 	}
 
 	// open databased of symbols
@@ -228,22 +247,8 @@ func main() {
 		// put file in channel
 		files <- path
 	}
-	toExplore := list.New()
 	for _, path := range indexDir {
-		toExplore.PushBack(path)
-	}
-	for toExplore.Len() > 0 {
-		// dequeue first path
-		path := toExplore.Front()
-		toExplore.Remove(path)
-
-		newDirs := explorePathToParse(
-			path.Value.(string),
-			visitorDir,
-			visitorC)
-		if newDirs != nil {
-			toExplore.PushBackList(newDirs)
-		}
+		traversePath(path, visitorDir, visitorC)
 	}
 
 	// remove from DB deleted files
@@ -272,7 +277,8 @@ func main() {
 		for {
 			conn, err := lis.Accept()
 			if err != nil {
-				log.Println("accepting connection (breaking):", err)
+				log.Println("accepting connection (breaking):",
+					err)
 				return
 			}
 
