@@ -18,13 +18,11 @@ package main
 
 import (
 	"bytes"
-	"database/sql"
 	"encoding/binary"
-	sqlite "github.com/mattn/go-sqlite3"
+	"github.com/mxk/go-sqlite/sqlite3"
+	"io"
 	"log"
 	"os"
-	"sync"
-	"time"
 )
 
 type Symbol struct {
@@ -35,180 +33,19 @@ type Symbol struct {
 	Col   int
 }
 
-type SymbolsDB struct {
-	db      *sql.DB
-	dbLite  *sqlite.SQLiteConn
-	ddb     *sql.DB
-	ddbLite *sqlite.SQLiteConn
+type ReaderDB struct {
+	conn *sqlite3.Conn
 
-	wg     sync.WaitGroup
-	ticker <-chan time.Time
-	flush  chan interface{}
-
-	selectSymbDecl *sql.Stmt
-	selectSymbUses *sql.Stmt
+	selectSymbDecl *sqlite3.Stmt
+	selectSymbUses *sqlite3.Stmt
 }
 
-func (db *SymbolsDB) empty() bool {
-	rows, err := db.db.Query(`SELECT name FROM sqlite_master
-                            WHERE type='table' AND name='files';`)
-	if err != nil {
-		log.Panic("check empty ", err)
-	}
-	defer rows.Close()
+func NewReaderDB(conn *sqlite3.Conn) *ReaderDB {
+	var err error
 
-	return !rows.Next()
-}
+	r := &ReaderDB{conn: conn}
 
-func (db *SymbolsDB) initDB() {
-	initStmt := `
-        CREATE TABLE files (
-            id          INTEGER,
-            file_info   BLOB,
-            path        TEXT UNIQUE NOT NULL,
-            PRIMARY     KEY(id)
-        );
-        CREATE TABLE symbol_decls (
-            name    TEXT NOT NULL,
-            unisr   TEXT NOT NULL,
-            file    INTEGER,
-            line    INTEGER,
-            col     INTEGER,
-
-            param   INTEGER DEFAULT 0,
-
-            def     INTEGER DEFAULT 0,
-
-            PRIMARY KEY(file, line, col)
-            FOREIGN KEY(file) REFERENCES files(id) ON DELETE CASCADE
-        );
-        CREATE TABLE func_decs_defs (
-            dec_file    INTEGER,
-            dec_line    INTEGER,
-            dec_col     INTEGER,
-
-            def_file    INTEGER,
-            def_line    INTEGER,
-            def_col     INTEGER,
-
-            PRIMARY KEY(dec_file, dec_line, dec_col,
-                        def_file, dec_line, dec_col)
-
-            FOREIGN KEY(dec_file, dec_line, dec_col)
-                REFERENCES symbol_decls(file, line, col) ON DELETE CASCADE
-            FOREIGN KEY(def_file, def_line, def_col)
-                REFERENCES symbol_decls(file, line, col) ON DELETE CASCADE
-        );
-        CREATE TABLE symbol_uses (
-            call        INTEGER DEFAULT 0,
-
-            file        INTEGER,
-            line        INTEGER,
-            col         INTEGER,
-
-            dec_file    INTEGER,
-            dec_line    INTEGER,
-            dec_col     INTEGER,
-
-            PRIMARY KEY(file, line, col)
-
-            FOREIGN KEY(dec_file, dec_line, dec_col)
-                REFERENCES symbol_decls(file, line, col) ON DELETE CASCADE
-        );
-	`
-	_, err := db.db.Exec(initStmt)
-	if err != nil {
-		log.Panic("init db ", err)
-	}
-}
-
-func copyDb(src *sqlite.SQLiteConn, dst *sqlite.SQLiteConn) {
-	backup, err := dst.Backup("main", src, "main")
-	if err != nil {
-		return
-	}
-	defer backup.Finish()
-
-	backup.Step(-1)
-}
-
-func (db *SymbolsDB) flusher() {
-	db.wg.Add(1)
-	defer db.wg.Done()
-
-	db.ticker = time.Tick(30 * time.Second)
-	db.flush = make(chan interface{}, 1)
-
-	for {
-		select {
-		case <-db.ticker:
-			// if this takes too long, we need to flush piece-wise
-			// TODO: This needs to create a DB connection every
-			// time it is used
-			// copyDb(db.dbLite, db.ddbLite)
-		case _, ok := <-db.flush:
-			copyDb(db.dbLite, db.ddbLite)
-			if !ok {
-				return
-			}
-		}
-	}
-}
-
-func OpenSymbolsDB(path string) *SymbolsDB {
-	/*
-	 * We need two DB connections in the symbol DB: one for the in memory
-	 * (main) database, and one for the in disk back database. Moreover, Go
-	 * sql interface does not provide functions to get SQLiteConn, that are
-	 * necessary to flow data from these two databases. For that reason, we
-	 * register a new driver with a connection hook that catch both
-	 * SQLiteConn for both DB connections.
-	 */
-
-	// open DB
-
-	sql3Conn := []*sqlite.SQLiteConn{}
-	sql.Register("sqlite3_conn_catch",
-		&sqlite.SQLiteDriver{
-			ConnectHook: func(newConn *sqlite.SQLiteConn) error {
-				sql3Conn = append(sql3Conn, newConn)
-				return nil
-			},
-		},
-	)
-
-	db, err := sql.Open("sqlite3_conn_catch", "file::memory:?cache=shared")
-	if err != nil {
-		log.Panic("open db ", err)
-	}
-	db.Ping()
-
-	ddb, err := sql.Open("sqlite3_conn_catch", path)
-	if err != nil {
-		log.Panic("open ddb ", err)
-	}
-	ddb.Ping()
-
-	r := &SymbolsDB{
-		db: db, dbLite: sql3Conn[0],
-		ddb: ddb, ddbLite: sql3Conn[1],
-	}
-
-	// init DB
-
-	db.Exec(`PRAGMA foreign_keys = ON;`)
-
-	copyDb(r.ddbLite, r.dbLite)
-
-	if r.empty() {
-		r.initDB()
-	}
-
-	go r.flusher()
-
-	// DB selects
-
-	r.selectSymbDecl, err = db.Prepare(`
+	r.selectSymbDecl, err = conn.Prepare(`
         SELECT st.name, st.unisr, f2.path, st.line, st.col
             FROM symbol_decls st, symbol_uses su, files f1, files f2
             WHERE
@@ -227,7 +64,7 @@ func OpenSymbolsDB(path string) *SymbolsDB {
 		log.Panic("prepare select symbol ", err)
 	}
 
-	r.selectSymbUses, err = db.Prepare(`
+	r.selectSymbUses, err = conn.Prepare(`
         SELECT f2.path, su2.line, su2.col
             FROM files f1, files f2, symbol_uses su1, symbol_uses su2
             WHERE
@@ -248,115 +85,114 @@ func OpenSymbolsDB(path string) *SymbolsDB {
 	return r
 }
 
-func (db *SymbolsDB) GetSymbolDecl(use *Symbol) *Symbol {
-	r, err := db.selectSymbDecl.Query(use.File, use.Line, use.Col)
-	if err != nil {
+func (db *ReaderDB) GetSymbolDecl(use *Symbol) *Symbol {
+	err := db.selectSymbDecl.Query(use.File, use.Line, use.Col)
+	switch {
+	case err == io.EOF:
+		return nil
+	case err != nil:
 		log.Panic("select symbol decl ", err)
 	}
-	defer r.Close()
+	defer db.selectSymbDecl.Reset()
 
-	if r.Next() {
-		s := new(Symbol)
+	s := new(Symbol)
 
-		err = r.Scan(&s.Name, &s.Unisr, &s.File, &s.Line, &s.Col)
-		if err != nil {
-			log.Panic("scan symbol ", err)
-		}
-
-		return s
-	} else {
-		return nil
+	err = db.selectSymbDecl.Scan(&s.Name, &s.Unisr, &s.File, &s.Line, &s.Col)
+	if err != nil {
+		log.Panic("scan symbol ", err)
 	}
+
+	return s
 }
 
-func (db *SymbolsDB) GetSymbolUses(use *Symbol) []*Symbol {
-	r, err := db.selectSymbUses.Query(use.File, use.Line, use.Col)
-	if err != nil {
+func (db *ReaderDB) GetSymbolUses(use *Symbol) []*Symbol {
+	ret := []*Symbol{}
+
+	err := db.selectSymbUses.Query(use.File, use.Line, use.Col)
+	switch {
+	case err == io.EOF:
+		return nil
+	case err != nil:
 		log.Panic("select symbol uses ", err)
 	}
-	defer r.Close()
+	defer db.selectSymbUses.Reset()
 
-	ret := []*Symbol{}
-	for r.Next() {
+	for {
 		s := new(Symbol)
 
-		err = r.Scan(&s.File, &s.Line, &s.Col)
+		err = db.selectSymbUses.Scan(&s.File, &s.Line, &s.Col)
 		if err != nil {
 			log.Panic("scan symbol ", err)
 		}
 
 		ret = append(ret, s)
+
+		if db.selectSymbUses.Next() == io.EOF {
+			break
+		}
 	}
 	return ret
 }
 
-func (db *SymbolsDB) GetSetFilesInDB() map[string]bool {
-	rows, err := db.db.Query(`SELECT path FROM files;`)
-	if err != nil {
+func (db *ReaderDB) GetSetFilesInDB() map[string]bool {
+	fileSet := map[string]bool{}
+
+	stmt, err := db.conn.Query(`SELECT path FROM files;`)
+	switch {
+	case err == io.EOF:
+		return nil
+	case err != nil:
 		log.Panic("select files ", err)
 	}
-	defer rows.Close()
 
-	fileSet := map[string]bool{}
-	for rows.Next() {
+	for {
 		var path string
 
-		err := rows.Scan(&path)
+		err := stmt.Scan(&path)
 		if err != nil {
 			log.Panic("scan path ", err)
 		}
 
 		fileSet[path] = true
+
+		if stmt.Next() == io.EOF {
+			break
+		}
 	}
 
 	return fileSet
 }
 
-func (db *SymbolsDB) Close() {
+func (db *ReaderDB) Close() {
 	db.selectSymbDecl.Close()
 	db.selectSymbUses.Close()
 
-	close(db.flush)
-	db.wg.Wait()
-
-	db.ddb.Close()
-	db.db.Close()
+	db.conn.Close()
 }
 
-/*
- * Transactions will be used to modify the database. This include inserting
- * indexing info while parsing a file and deleting a file reference when no
- * longer exists. To modify the DB, a transaction should first be created and
- * once all the modifications are don, the trasaction should be closed.
- */
+type WriterDB struct {
+	conn *sqlite3.Conn
 
-type SymbolsTx struct {
-	tx *sql.Tx
-	db *SymbolsDB
+	selectFileInfo *sqlite3.Stmt
 
-	selectFileInfo *sql.Stmt
+	insertFile       *sqlite3.Stmt
+	insertSymb       *sqlite3.Stmt
+	insertFuncDef    *sqlite3.Stmt
+	insertFuncDecDef *sqlite3.Stmt
+	insertSymbUse    *sqlite3.Stmt
+	insertFuncCall   *sqlite3.Stmt
 
-	insertFile       *sql.Stmt
-	insertSymb       *sql.Stmt
-	insertFuncDef    *sql.Stmt
-	insertFuncDecDef *sql.Stmt
-	insertSymbUse    *sql.Stmt
-	insertFuncCall   *sql.Stmt
-
-	delFileRef *sql.Stmt
+	delFileRef *sqlite3.Stmt
 }
 
-func (db *SymbolsDB) BeginTx() *SymbolsTx {
-	tx, err := db.db.Begin()
-	if err != nil {
-		log.Panic("begin transaction ", err)
-	}
+func NewWriterDB(conn *sqlite3.Conn) *WriterDB {
+	var err error
 
-	r := &SymbolsTx{db: db, tx: tx}
+	r := &WriterDB{conn: conn}
 
 	// DB selects
 
-	r.selectFileInfo, err = tx.Prepare(`
+	r.selectFileInfo, err = conn.Prepare(`
         SELECT file_info FROM files WHERE path = ?;
 	`)
 	if err != nil {
@@ -365,14 +201,14 @@ func (db *SymbolsDB) BeginTx() *SymbolsTx {
 
 	// DB inserts
 
-	r.insertFile, err = tx.Prepare(`
+	r.insertFile, err = conn.Prepare(`
         INSERT INTO files(path, file_info) VALUES (?, ?);
 	`)
 	if err != nil {
 		log.Panic("prepare insert files ", err)
 	}
 
-	r.insertSymb, err = tx.Prepare(`
+	r.insertSymb, err = conn.Prepare(`
         INSERT OR IGNORE INTO symbol_decls(name, unisr, file, line, col, param)
             SELECT ?, ?, id, ?, ?, ? FROM files
             WHERE path = ?;
@@ -381,7 +217,7 @@ func (db *SymbolsDB) BeginTx() *SymbolsTx {
 		log.Panic("prepare insert symbol ", err)
 	}
 
-	r.insertFuncDef, err = tx.Prepare(`
+	r.insertFuncDef, err = conn.Prepare(`
         INSERT OR IGNORE INTO symbol_decls(name, unisr, file, line, col, def)
             SELECT ?, ?, id, ?, ?, 1 FROM files
             WHERE path = ?;
@@ -390,7 +226,7 @@ func (db *SymbolsDB) BeginTx() *SymbolsTx {
 		log.Panic("prepare insert func def ", err)
 	}
 
-	r.insertFuncDecDef, err = tx.Prepare(`
+	r.insertFuncDecDef, err = conn.Prepare(`
         INSERT OR IGNORE INTO func_decs_defs
             SELECT f1.id, ?, ?, f2.id, ?, ? FROM files f1, files f2
             WHERE f1.path = ? AND f2.path = ?;
@@ -399,7 +235,7 @@ func (db *SymbolsDB) BeginTx() *SymbolsTx {
 		log.Panic("prepare insert func dec/def ", err)
 	}
 
-	r.insertSymbUse, err = tx.Prepare(`
+	r.insertSymbUse, err = conn.Prepare(`
         INSERT OR IGNORE INTO symbol_uses
             SELECT 0, f1.id, ?, ?, f2.id, ?, ? FROM files f1, files f2
                 WHERE f1.path = ? AND f2.path = ?;
@@ -408,7 +244,7 @@ func (db *SymbolsDB) BeginTx() *SymbolsTx {
 		log.Panic("preapre insert symbol use ", err)
 	}
 
-	r.insertFuncCall, err = tx.Prepare(`
+	r.insertFuncCall, err = conn.Prepare(`
         INSERT OR REPLACE INTO symbol_uses
             SELECT 1, f1.id, ?, ?, f2.id, ?, ? FROM files f1, files f2
                 WHERE f1.path = ? AND f2.path = ?;
@@ -419,7 +255,7 @@ func (db *SymbolsDB) BeginTx() *SymbolsTx {
 
 	// DB (only) delete
 
-	r.delFileRef, err = tx.Prepare(`
+	r.delFileRef, err = conn.Prepare(`
         DELETE FROM files WHERE path = ?;
 	`)
 	if err != nil {
@@ -429,29 +265,29 @@ func (db *SymbolsDB) BeginTx() *SymbolsTx {
 	return r
 }
 
-func (tx *SymbolsTx) InsertSymbol(sym *Symbol) {
-	_, err := tx.insertSymb.Exec(sym.Name, sym.Unisr,
+func (db *WriterDB) InsertSymbol(sym *Symbol) {
+	err := db.insertSymb.Exec(sym.Name, sym.Unisr,
 		sym.Line, sym.Col, false, sym.File)
 	if err != nil {
 		log.Panic("insert symbol ", err)
 	}
 }
 
-func (tx *SymbolsTx) InsertParamDecl(sym *Symbol) {
-	_, err := tx.insertSymb.Exec(sym.Name, sym.Unisr,
+func (db *WriterDB) InsertParamDecl(sym *Symbol) {
+	err := db.insertSymb.Exec(sym.Name, sym.Unisr,
 		sym.Line, sym.Col, true, sym.File)
 	if err != nil {
 		log.Panic("insert symbol param ", err)
 	}
 }
 
-func (tx *SymbolsTx) InsertSymbolUse(use, dec *Symbol) {
-	_, err := tx.insertSymbUse.Exec(use.Line, use.Col,
+func (db *WriterDB) InsertSymbolUse(use, dec *Symbol) {
+	err := db.insertSymbUse.Exec(use.Line, use.Col,
 		dec.Line, dec.Col,
 		use.File, dec.File)
 	if err != nil {
-		sqliteErr := err.(sqlite.Error)
-		if sqliteErr.ExtendedCode == sqlite.ErrConstraintForeignKey {
+		sqliteErr := err.(*sqlite3.Error)
+		if sqliteErr.Code() == sqlite3.CONSTRAINT_FOREIGNKEY {
 			// If the symbol is not declared, ignore.
 			//log.Println("use with no declaration ", use.Name, " ignoring")
 		} else {
@@ -460,13 +296,13 @@ func (tx *SymbolsTx) InsertSymbolUse(use, dec *Symbol) {
 	}
 }
 
-func (tx *SymbolsTx) InsertFuncCall(call, dec *Symbol) {
-	_, err := tx.insertFuncCall.Exec(call.Line, call.Col,
+func (db *WriterDB) InsertFuncCall(call, dec *Symbol) {
+	err := db.insertFuncCall.Exec(call.Line, call.Col,
 		dec.Line, dec.Col,
 		call.File, dec.File)
 	if err != nil {
-		sqliteErr := err.(sqlite.Error)
-		if sqliteErr.ExtendedCode == sqlite.ErrConstraintForeignKey {
+		sqliteErr := err.(*sqlite3.Error)
+		if sqliteErr.Code() == sqlite3.CONSTRAINT_FOREIGNKEY {
 			// If the symbol is not declared, ignore.
 			//log.Println("call with no declaration ", call.Name, " ignoring")
 		} else {
@@ -504,20 +340,24 @@ func getFileInfoBytes(fi os.FileInfo) []byte {
 	return buf.Bytes()
 }
 
-func (tx *SymbolsTx) getFileInfoBytesDB(file string) (bool, []byte) {
-	var inDbFileInfo []byte
+func (db *WriterDB) getFileInfoBytesDB(file string) []byte {
 
-	err := tx.selectFileInfo.QueryRow(file).Scan(&inDbFileInfo)
+	err := db.selectFileInfo.Query(file)
 	switch {
-	case err == sql.ErrNoRows:
-		return false, nil
+	case err == io.EOF:
+		return nil
 	case err != nil:
+		log.Panic("querying file info ", err)
+	}
+	defer db.selectFileInfo.Reset()
+
+	var inDbFileInfo []byte
+	err = db.selectFileInfo.Scan(&inDbFileInfo)
+	if err != nil {
 		log.Panic("scanning file info ", err)
-	default:
-		return true, inDbFileInfo
 	}
 
-	return false, nil // not necessary but compiler complains
+	return inDbFileInfo
 }
 
 /*
@@ -526,31 +366,32 @@ func (tx *SymbolsTx) getFileInfoBytesDB(file string) (bool, []byte) {
  * In either case, it will insert a new file entry in the DB and the Parser
  * should be called to populate the DB with the new symbols.
  */
-func (tx *SymbolsTx) NeedToProcessFile(file string) bool {
+func (db *WriterDB) NeedToProcessFile(file string) bool {
 	fi, err := os.Stat(file)
 	if err != nil {
 		log.Println(err, ": unable to read file ", file)
-		tx.RemoveFileReferences(file)
+		db.RemoveFileReferences(file)
 		return false
 	}
 
 	fiBytes := getFileInfoBytes(fi)
-	exist, inDbFiBytes := tx.getFileInfoBytesDB(file)
+	inDbFiBytes := db.getFileInfoBytesDB(file)
 
-	if exist {
+	if len(inDbFiBytes) > 0 {
 		if bytes.Compare(fiBytes, inDbFiBytes) == 0 {
-			// the file info in the DB and the file are the same; nothing to process.
+			// the file info in the DB and the file are the same;
+			// nothing to process.
 			return false
 		} else {
 			// not up to date, remove all references
-			tx.RemoveFileReferences(file)
+			db.RemoveFileReferences(file)
 		}
 	}
 
-	_, err = tx.insertFile.Exec(file, fiBytes)
+	err = db.insertFile.Exec(file, fiBytes)
 	if err != nil {
-		sqliteErr := err.(sqlite.Error)
-		if sqliteErr.ExtendedCode == sqlite.ErrConstraintUnique {
+		sqliteErr := err.(*sqlite3.Error)
+		if sqliteErr.Code() == sqlite3.CONSTRAINT_UNIQUE {
 			// two threads tried to add the same file, fail the second one
 			return false
 		} else {
@@ -561,28 +402,28 @@ func (tx *SymbolsTx) NeedToProcessFile(file string) bool {
 	return true
 }
 
-func (tx *SymbolsTx) RemoveFileReferences(file string) {
-	_, err := tx.delFileRef.Exec(file)
+func (db *WriterDB) RemoveFileReferences(file string) {
+	err := db.delFileRef.Exec(file)
 	if err != nil {
 		log.Panic("delete file ", err)
 	}
 }
 
-func (tx *SymbolsTx) InsertFuncDef(def *Symbol) {
+func (db *WriterDB) InsertFuncDef(def *Symbol) {
 	// insert function definition. Ignore if already exists.
-	_, err := tx.insertFuncDef.Exec(def.Name, def.Unisr, def.Line, def.Col,
+	err := db.insertFuncDef.Exec(def.Name, def.Unisr, def.Line, def.Col,
 		def.File)
 	if err != nil {
 		log.Panic("insert func def ", err)
 	}
 }
 
-func (tx *SymbolsTx) InsertFuncSymb(dec, def *Symbol) {
-	tx.InsertFuncDef(def)
-	tx.InsertSymbol(dec)
+func (db *WriterDB) InsertFuncSymb(dec, def *Symbol) {
+	db.InsertFuncDef(def)
+	db.InsertSymbol(dec)
 
 	// point this declaration to its definition
-	_, err := tx.insertFuncDecDef.Exec(
+	err := db.insertFuncDecDef.Exec(
 		dec.Line, dec.Col,
 		def.Line, def.Col,
 		dec.File, def.File)
@@ -591,17 +432,139 @@ func (tx *SymbolsTx) InsertFuncSymb(dec, def *Symbol) {
 	}
 }
 
-func (tx *SymbolsTx) Close() {
-	tx.selectFileInfo.Close()
+func (db *WriterDB) Close() {
+	db.selectFileInfo.Close()
 
-	tx.insertFile.Close()
-	tx.insertSymb.Close()
-	tx.insertFuncDef.Close()
-	tx.insertFuncDecDef.Close()
-	tx.insertSymbUse.Close()
-	tx.insertFuncCall.Close()
+	db.insertFile.Close()
+	db.insertSymb.Close()
+	db.insertFuncDef.Close()
+	db.insertFuncDecDef.Close()
+	db.insertSymbUse.Close()
+	db.insertFuncCall.Close()
 
-	tx.delFileRef.Close()
+	db.delFileRef.Close()
 
-	tx.tx.Commit()
+	db.conn.Close()
+}
+
+type DBConnFactory struct {
+	path   string
+	dbPath string
+	conn   *sqlite3.Conn
+}
+
+func (db *DBConnFactory) initDB() {
+	initStmt := `
+        CREATE TABLE IF NOT EXISTS files (
+            id          INTEGER,
+            file_info   BLOB,
+            path        TEXT UNIQUE NOT NULL,
+            PRIMARY     KEY(id)
+        );
+        CREATE TABLE IF NOT EXISTS symbol_decls (
+            name    TEXT NOT NULL,
+            unisr   TEXT NOT NULL,
+            file    INTEGER,
+            line    INTEGER,
+            col     INTEGER,
+
+            param   INTEGER DEFAULT 0,
+
+            def     INTEGER DEFAULT 0,
+
+            PRIMARY KEY(file, line, col)
+            FOREIGN KEY(file) REFERENCES files(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS func_decs_defs (
+            dec_file    INTEGER,
+            dec_line    INTEGER,
+            dec_col     INTEGER,
+
+            def_file    INTEGER,
+            def_line    INTEGER,
+            def_col     INTEGER,
+
+            PRIMARY KEY(dec_file, dec_line, dec_col,
+                        def_file, dec_line, dec_col)
+
+            FOREIGN KEY(dec_file, dec_line, dec_col)
+                REFERENCES symbol_decls(file, line, col) ON DELETE CASCADE
+            FOREIGN KEY(def_file, def_line, def_col)
+                REFERENCES symbol_decls(file, line, col) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS symbol_uses (
+            call        INTEGER DEFAULT 0,
+
+            file        INTEGER,
+            line        INTEGER,
+            col         INTEGER,
+
+            dec_file    INTEGER,
+            dec_line    INTEGER,
+            dec_col     INTEGER,
+
+            PRIMARY KEY(file, line, col)
+
+            FOREIGN KEY(dec_file, dec_line, dec_col)
+                REFERENCES symbol_decls(file, line, col) ON DELETE CASCADE
+        );
+	`
+	err := db.conn.Exec(initStmt)
+	if err != nil {
+		log.Panic("init db ", err)
+	}
+}
+
+func copyDb(src *sqlite3.Conn, dst *sqlite3.Conn) {
+	backup, err := src.Backup("main", dst, "main")
+	if err != nil {
+		return
+	}
+	defer backup.Close()
+
+	backup.Step(-1)
+}
+
+func getConn(dbPath string) *sqlite3.Conn {
+	conn, err := sqlite3.Open(dbPath)
+	if err != nil {
+		log.Panic("open db ", err)
+	}
+	conn.Exec(`PRAGMA foreign_keys = ON;`)
+
+	return conn
+}
+
+func NewDBConnFactory(path string) *DBConnFactory {
+	dbPath := "file::memory:?cache=shared"
+
+	r := &DBConnFactory{path, dbPath, getConn(dbPath)}
+
+	// init DB
+
+	ddb := getConn(path)
+	copyDb(ddb, r.conn)
+	ddb.Close()
+
+	r.initDB()
+
+	return r
+}
+
+func (fac *DBConnFactory) Close() {
+	ddb := getConn(fac.path)
+	copyDb(fac.conn, ddb)
+	ddb.Close()
+
+	fac.conn.Close()
+}
+
+func (fac *DBConnFactory) NewReader() *ReaderDB {
+	conn := getConn(fac.dbPath)
+	return NewReaderDB(conn)
+}
+
+func (fac *DBConnFactory) NewWriter() *WriterDB {
+	conn := getConn(fac.dbPath)
+	return NewWriterDB(conn)
 }

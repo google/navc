@@ -19,7 +19,7 @@ package main
 import "fmt"
 
 type RequestHandler struct {
-	db *SymbolsDB
+	db *ReaderDB
 }
 
 func (rh *RequestHandler) GetSymbolDecl(use *Symbol, res *Symbol) error {

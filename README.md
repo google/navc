@@ -30,11 +30,6 @@ in navc.vim.
 
 TODO
 ====
-* Fix backup of in-memory database. Currently, the connection for the backup
-  can be gone when performing the backup. We need to create a fresh connection
-  each time we have a backup.
-* Do we really need to periodically update the DB? Maybe backing up at daemon
-  shutdown is enough.
 * We need to introduce the dependency between files so that all the dependents
   get updated as soon as a file changes.
 * Find a way to parse files in parallel either by concurrently writing to the

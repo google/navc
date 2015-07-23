@@ -127,7 +127,7 @@ func traversePath(path string, visitDir func(string), visitC func(string)) {
 }
 
 func handleChange(event fsnotify.Event,
-	db *SymbolsDB,
+	db *WriterDB,
 	watcher *fsnotify.Watcher,
 	files chan string) {
 
@@ -147,9 +147,7 @@ func handleChange(event fsnotify.Event,
 		traversePath(event.Name, visitorDir, visitorC)
 	case event.Op&(fsnotify.Remove|fsnotify.Rename) != 0:
 		watcher.Remove(event.Name)
-		tx := db.BeginTx()
-		tx.RemoveFileReferences(filepath.Clean(event.Name))
-		tx.Close()
+		db.RemoveFileReferences(filepath.Clean(event.Name))
 	}
 }
 
@@ -195,7 +193,7 @@ func main() {
 	}
 
 	// open databased of symbols
-	db := OpenSymbolsDB(dbFile)
+	db := NewDBConnFactory(dbFile)
 	defer db.Close()
 
 	// create parser
@@ -222,7 +220,9 @@ func main() {
 				if !ok {
 					return
 				}
-				handleChange(event, db, watcher, files)
+				wr := db.NewWriter()
+				handleChange(event, wr, watcher, files)
+				wr.Close()
 			case err, ok := <-watcher.Errors:
 				if !ok {
 					return
@@ -234,7 +234,9 @@ func main() {
 	}()
 
 	// explore all the paths in indexDir and process all files
-	removedFilesSet := db.GetSetFilesInDB()
+	rd := db.NewReader()
+	removedFilesSet := rd.GetSetFilesInDB()
+	rd.Close()
 	visitorDir := func(path string) {
 		// add watcher to directory
 		watcher.Add(path)
@@ -252,11 +254,11 @@ func main() {
 	}
 
 	// remove from DB deleted files
-	tx := db.BeginTx()
+	wr := db.NewWriter()
 	for path := range removedFilesSet {
-		tx.RemoveFileReferences(path)
+		wr.RemoveFileReferences(path)
 	}
-	tx.Close()
+	wr.Close()
 
 	// start serving requests
 	os.Remove(socketFile)
@@ -269,7 +271,8 @@ func main() {
 	defer lis.Close()
 
 	handler := rpc.NewServer()
-	handler.Register(&RequestHandler{db})
+	rd = db.NewReader()
+	handler.Register(&RequestHandler{rd})
 	go func() {
 		wg.Add(1)
 		defer wg.Done()
@@ -290,6 +293,7 @@ func main() {
 			codec.Close()
 		}
 	}()
+	defer rd.Close()
 
 	// wait until ctl-c is pressed
 	select {

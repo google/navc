@@ -26,7 +26,7 @@ import (
 )
 
 type Parser struct {
-	db *SymbolsDB
+	db *DBConnFactory
 
 	cas map[string][]string
 }
@@ -134,16 +134,16 @@ func getCompArgs(command, path string) []string {
 	return args
 }
 
-func NewParser(db *SymbolsDB, inputDirs []string) *Parser {
+func NewParser(db *DBConnFactory, inputDirs []string) *Parser {
 	ret := &Parser{db, make(map[string][]string)}
 
 	// read compilation args db and fix files paths
 	for _, path := range inputDirs {
 		f, err := os.Open(path + "/compile_commands.json")
-		if os.IsNotExist(err) {
-			continue
-		} else if err != nil {
+		if os.IsPermission(err) {
 			log.Panic("error opening compile db: ", err)
+		} else if err != nil {
+			continue
 		}
 		defer f.Close()
 
@@ -172,10 +172,10 @@ func getSymbolFromCursor(cursor *clang.Cursor) *Symbol {
 }
 
 func (pa *Parser) Parse(file string) {
-	tx := pa.db.BeginTx()
-	defer tx.Close()
+	writer := pa.db.NewWriter()
+	defer writer.Close()
 
-	if !tx.NeedToProcessFile(file) {
+	if !writer.NeedToProcessFile(file) {
 		return
 	}
 
@@ -209,13 +209,15 @@ func (pa *Parser) Parse(file string) {
 		// TODO: erase! this is not required
 		if false {
 			log.Printf("%s: %s (%s)\n",
-				cursor.Kind().Spelling(), cursor.Spelling(), cursor.USR())
+				cursor.Kind().Spelling(),
+				cursor.Spelling(),
+				cursor.USR())
 			log.Println(fName, ":", line, col)
 		}
 		////////////////////////////////////
 
 		if !insertedFiles[fName] {
-			tx.NeedToProcessFile(fName)
+			writer.NeedToProcessFile(fName)
 			insertedFiles[fName] = true
 		}
 
@@ -225,28 +227,28 @@ func (pa *Parser) Parse(file string) {
 			defCursor := cursor.DefinitionCursor()
 			if !defCursor.IsNull() {
 				def := getSymbolFromCursor(&defCursor)
-				tx.InsertFuncSymb(dec, def)
+				writer.InsertFuncSymb(dec, def)
 			} else {
-				tx.InsertSymbol(dec)
+				writer.InsertSymbol(dec)
 			}
 		case clang.CK_VarDecl:
 			dec := getSymbolFromCursor(&cursor)
-			tx.InsertSymbol(dec)
+			writer.InsertSymbol(dec)
 		case clang.CK_ParmDecl:
 			if cursor.Spelling() != "" {
 				dec := getSymbolFromCursor(&cursor)
-				tx.InsertParamDecl(dec)
+				writer.InsertParamDecl(dec)
 			}
 		case clang.CK_CallExpr:
 			call := getSymbolFromCursor(&cursor)
 			decCursor := cursor.Referenced()
 			dec := getSymbolFromCursor(&decCursor)
-			tx.InsertFuncCall(call, dec)
+			writer.InsertFuncCall(call, dec)
 		case clang.CK_DeclRefExpr:
 			use := getSymbolFromCursor(&cursor)
 			decCursor := cursor.Referenced()
 			dec := getSymbolFromCursor(&decCursor)
-			tx.InsertSymbolUse(use, dec)
+			writer.InsertSymbolUse(use, dec)
 		}
 
 		// TODO: eventually we need to continue on some cases for faster run
