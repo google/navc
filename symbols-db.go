@@ -181,6 +181,7 @@ type WriterDB struct {
 	insertFuncDecDef *sqlite3.Stmt
 	insertSymbUse    *sqlite3.Stmt
 	insertFuncCall   *sqlite3.Stmt
+	insertDepend     *sqlite3.Stmt
 
 	delFileRef *sqlite3.Stmt
 }
@@ -251,6 +252,15 @@ func NewWriterDB(conn *sqlite3.Conn) *WriterDB {
 	`)
 	if err != nil {
 		log.Panic("preapre insert func call ", err)
+	}
+
+	r.insertDepend, err = conn.Prepare(`
+	INSERT OR IGNORE INTO files_deps
+	    SELECT f1.id, f2.id FROM files f1, files f2
+	        WHERE f1.path = ? AND f2.path = ?;
+	`)
+	if err != nil {
+		log.Panic("prepare insert files deps ", err)
 	}
 
 	// DB (only) delete
@@ -392,7 +402,8 @@ func (db *WriterDB) NeedToProcessFile(file string) bool {
 	if err != nil {
 		sqliteErr := err.(*sqlite3.Error)
 		if sqliteErr.Code() == sqlite3.CONSTRAINT_UNIQUE {
-			// two threads tried to add the same file, fail the second one
+			// two threads tried to add the same file, fail the
+			// second one
 			return false
 		} else {
 			log.Panic("insert file ", err)
@@ -432,6 +443,13 @@ func (db *WriterDB) InsertFuncSymb(dec, def *Symbol) {
 	}
 }
 
+func (db *WriterDB) InsertHeadDependency(file, head string) {
+	err := db.insertDepend.Exec(file, head)
+	if err != nil {
+		log.Panic("insert dependency ", err)
+	}
+}
+
 func (db *WriterDB) Close() {
 	db.selectFileInfo.Close()
 
@@ -441,6 +459,7 @@ func (db *WriterDB) Close() {
 	db.insertFuncDecDef.Close()
 	db.insertSymbUse.Close()
 	db.insertFuncCall.Close()
+	db.insertDepend.Close()
 
 	db.delFileRef.Close()
 
@@ -461,6 +480,13 @@ func (db *DBConnFactory) initDB() {
             path        TEXT UNIQUE NOT NULL,
             PRIMARY     KEY(id)
         );
+	CREATE TABLE IF NOT EXISTS files_deps (
+	    id          INTEGER,
+	    depend	INTEGER,
+	    PRIMARY     KEY(id, depend)
+	    FOREIGN KEY(id) REFERENCES files(id) ON DELETE CASCADE
+	    FOREIGN KEY(depend) REFERENCES files(id) ON DELETE CASCADE
+	);
         CREATE TABLE IF NOT EXISTS symbol_decls (
             name    TEXT NOT NULL,
             unisr   TEXT NOT NULL,

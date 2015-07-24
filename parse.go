@@ -167,8 +167,14 @@ func NewParser(db *DBConnFactory, inputDirs []string) *Parser {
 
 func getSymbolFromCursor(cursor *clang.Cursor) *Symbol {
 	f, line, col, _ := cursor.Location().GetFileLocation()
-	fName := f.Name()
-	return &Symbol{cursor.Spelling(), cursor.USR(), fName, int(line), int(col)}
+	fName := filepath.Clean(f.Name())
+	return &Symbol{
+		cursor.Spelling(),
+		cursor.USR(),
+		fName,
+		int(line),
+		int(col),
+	}
 }
 
 func (pa *Parser) Parse(file string) {
@@ -198,10 +204,9 @@ func (pa *Parser) Parse(file string) {
 			return clang.CVR_Continue
 		}
 
-		f, line, col, _ := cursor.Location().GetFileLocation()
-		fName := f.Name()
+		cur := getSymbolFromCursor(&cursor)
 
-		if fName == "" {
+		if cur.File == "" || cur.File == "." {
 			// ignore system code
 			return clang.CVR_Continue
 		}
@@ -212,46 +217,50 @@ func (pa *Parser) Parse(file string) {
 				cursor.Kind().Spelling(),
 				cursor.Spelling(),
 				cursor.USR())
-			log.Println(fName, ":", line, col)
+			log.Println(cur.File, ":", cur.Line, cur.Col)
 		}
 		////////////////////////////////////
 
-		if !insertedFiles[fName] {
-			writer.NeedToProcessFile(fName)
-			insertedFiles[fName] = true
+		if !insertedFiles[cur.File] {
+			writer.NeedToProcessFile(cur.File)
+			insertedFiles[cur.File] = true
 		}
 
 		switch cursor.Kind() {
 		case clang.CK_FunctionDecl:
-			dec := getSymbolFromCursor(&cursor)
 			defCursor := cursor.DefinitionCursor()
 			if !defCursor.IsNull() {
 				def := getSymbolFromCursor(&defCursor)
-				writer.InsertFuncSymb(dec, def)
+				writer.InsertFuncSymb(cur, def)
 			} else {
-				writer.InsertSymbol(dec)
+				writer.InsertSymbol(cur)
 			}
 		case clang.CK_VarDecl:
-			dec := getSymbolFromCursor(&cursor)
-			writer.InsertSymbol(dec)
+			writer.InsertSymbol(cur)
 		case clang.CK_ParmDecl:
 			if cursor.Spelling() != "" {
-				dec := getSymbolFromCursor(&cursor)
-				writer.InsertParamDecl(dec)
+				writer.InsertParamDecl(cur)
 			}
 		case clang.CK_CallExpr:
-			call := getSymbolFromCursor(&cursor)
 			decCursor := cursor.Referenced()
 			dec := getSymbolFromCursor(&decCursor)
-			writer.InsertFuncCall(call, dec)
+			writer.InsertFuncCall(cur, dec)
 		case clang.CK_DeclRefExpr:
-			use := getSymbolFromCursor(&cursor)
 			decCursor := cursor.Referenced()
 			dec := getSymbolFromCursor(&decCursor)
-			writer.InsertSymbolUse(use, dec)
+			writer.InsertSymbolUse(cur, dec)
+		case clang.CK_InclusionDirective:
+			header := filepath.Dir(cur.File) + "/" + cur.Name
+			header = filepath.Clean(header)
+			if !insertedFiles[header] {
+				writer.NeedToProcessFile(header)
+				insertedFiles[header] = true
+			}
+			writer.InsertHeadDependency(file, header)
 		}
 
-		// TODO: eventually we need to continue on some cases for faster run
+		// TODO: eventually we need to continue on some cases for
+		// faster run
 		return clang.CVR_Recurse
 	}
 
