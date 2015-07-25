@@ -178,15 +178,7 @@ func getSymbolFromCursor(cursor *clang.Cursor) *Symbol {
 }
 
 func (pa *Parser) Parse(file string) {
-	writer := pa.db.NewWriter()
-	defer writer.Close()
-
-	if !writer.NeedToProcessFile(file) {
-		return
-	}
-
-	// files already inserted in the DB from this parsing
-	insertedFiles := map[string]bool{file: true}
+	addedDepends := map[string]bool{file: true}
 
 	// insert symbols
 	idx := clang.NewIndex(0, 0)
@@ -198,6 +190,9 @@ func (pa *Parser) Parse(file string) {
 	}
 	tu := idx.Parse(file, args, nil, clang.TU_DetailedPreprocessingRecord)
 	defer tu.Dispose()
+
+	writer := pa.db.NewWriter()
+	defer writer.Close()
 
 	visitNode := func(cursor, parent clang.Cursor) clang.ChildVisitResult {
 		if cursor.IsNull() {
@@ -221,9 +216,13 @@ func (pa *Parser) Parse(file string) {
 		}
 		////////////////////////////////////
 
-		if !insertedFiles[cur.File] {
-			writer.NeedToProcessFile(cur.File)
-			insertedFiles[cur.File] = true
+		if !addedDepends[cur.File] {
+			if !UpdateDependency(file, cur.File) {
+				// The header is not uptodate. Cancel this
+				// parsing to start over with this file
+				return clang.CVR_Break
+			}
+			addedDepends[cur.File] = true
 		}
 
 		switch cursor.Kind() {
@@ -249,14 +248,6 @@ func (pa *Parser) Parse(file string) {
 			decCursor := cursor.Referenced()
 			dec := getSymbolFromCursor(&decCursor)
 			writer.InsertSymbolUse(cur, dec)
-		case clang.CK_InclusionDirective:
-			header := filepath.Dir(cur.File) + "/" + cur.Name
-			header = filepath.Clean(header)
-			if !insertedFiles[header] {
-				writer.NeedToProcessFile(header)
-				insertedFiles[header] = true
-			}
-			writer.InsertHeadDependency(file, header)
 		}
 
 		// TODO: eventually we need to continue on some cases for

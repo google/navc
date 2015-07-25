@@ -174,6 +174,7 @@ type WriterDB struct {
 	conn *sqlite3.Conn
 
 	selectFileInfo *sqlite3.Stmt
+	selectFileDeps *sqlite3.Stmt
 
 	insertFile       *sqlite3.Stmt
 	insertSymb       *sqlite3.Stmt
@@ -184,6 +185,7 @@ type WriterDB struct {
 	insertDepend     *sqlite3.Stmt
 
 	delFileRef *sqlite3.Stmt
+	delDepends *sqlite3.Stmt
 }
 
 func NewWriterDB(conn *sqlite3.Conn) *WriterDB {
@@ -195,6 +197,14 @@ func NewWriterDB(conn *sqlite3.Conn) *WriterDB {
 
 	r.selectFileInfo, err = conn.Prepare(`
         SELECT file_info FROM files WHERE path = ?;
+	`)
+	if err != nil {
+		log.Panic("prepare select hash ", err)
+	}
+
+	r.selectFileDeps, err = conn.Prepare(`
+        SELECT f1.path FROM files f1, files f2, files_deps d
+	WHERE f2.path = ? AND f2.id = d.depend AND f1.id = d.id;
 	`)
 	if err != nil {
 		log.Panic("prepare select hash ", err)
@@ -270,6 +280,16 @@ func NewWriterDB(conn *sqlite3.Conn) *WriterDB {
 	`)
 	if err != nil {
 		log.Panic("prepare delete file ", err)
+	}
+
+	r.delDepends, err = conn.Prepare(`
+	DELETE FROM files WHERE id IN (
+	    SELECT d.id FROM files_deps d, files f
+	        WHERE f.path = ? AND d.depend = f.id
+	);
+	`)
+	if err != nil {
+		log.Panic("prepare delete dependencies ", err)
 	}
 
 	return r
@@ -370,47 +390,37 @@ func (db *WriterDB) getFileInfoBytesDB(file string) []byte {
 	return inDbFileInfo
 }
 
-/*
- * This function checks if the file exist and it is up to date. If it is not
- * not up to date, it will remove the current references of the file in the DB.
- * In either case, it will insert a new file entry in the DB and the Parser
- * should be called to populate the DB with the new symbols.
- */
-func (db *WriterDB) NeedToProcessFile(file string) bool {
+func (db *WriterDB) InsertFile(file string, fiBytes []byte) {
+	err := db.insertFile.Exec(file, fiBytes)
+	if err != nil {
+		log.Panic("insert file ", err)
+	}
+
+}
+
+func (db *WriterDB) UptodateFile(file string) (bool, bool, []byte, error) {
 	fi, err := os.Stat(file)
 	if err != nil {
 		log.Println(err, ": unable to read file ", file)
-		db.RemoveFileReferences(file)
-		return false
+		return false, false, nil, err
 	}
 
 	fiBytes := getFileInfoBytes(fi)
 	inDbFiBytes := db.getFileInfoBytesDB(file)
 
+	exist := false
+	uptodate := false
 	if len(inDbFiBytes) > 0 {
+		exist = true
+
 		if bytes.Compare(fiBytes, inDbFiBytes) == 0 {
 			// the file info in the DB and the file are the same;
 			// nothing to process.
-			return false
-		} else {
-			// not up to date, remove all references
-			db.RemoveFileReferences(file)
+			uptodate = true
 		}
 	}
 
-	err = db.insertFile.Exec(file, fiBytes)
-	if err != nil {
-		sqliteErr := err.(*sqlite3.Error)
-		if sqliteErr.Code() == sqlite3.CONSTRAINT_UNIQUE {
-			// two threads tried to add the same file, fail the
-			// second one
-			return false
-		} else {
-			log.Panic("insert file ", err)
-		}
-	}
-
-	return true
+	return exist, uptodate, fiBytes, nil
 }
 
 func (db *WriterDB) RemoveFileReferences(file string) {
@@ -418,6 +428,44 @@ func (db *WriterDB) RemoveFileReferences(file string) {
 	if err != nil {
 		log.Panic("delete file ", err)
 	}
+}
+
+func (db *WriterDB) RemoveFileDepsReferences(file string) []string {
+	db.conn.Begin()
+	defer db.conn.Commit()
+
+	deps := []string{}
+
+	err := db.selectFileDeps.Query(file)
+	switch {
+	case err == io.EOF:
+		return deps
+	case err != nil:
+		log.Panic("querying file deps ", err)
+	}
+	defer db.selectFileDeps.Reset()
+
+	for {
+		var dep string
+
+		err = db.selectFileDeps.Scan(&dep)
+		if err != nil {
+			log.Panic("scan dep ", err)
+		}
+
+		deps = append(deps, dep)
+
+		if db.selectFileDeps.Next() == io.EOF {
+			break
+		}
+	}
+
+	err = db.delDepends.Exec(file)
+	if err != nil {
+		log.Panic("delete depends ", err)
+	}
+
+	return deps
 }
 
 func (db *WriterDB) InsertFuncDef(def *Symbol) {
@@ -443,7 +491,7 @@ func (db *WriterDB) InsertFuncSymb(dec, def *Symbol) {
 	}
 }
 
-func (db *WriterDB) InsertHeadDependency(file, head string) {
+func (db *WriterDB) InsertDependency(file, head string) {
 	err := db.insertDepend.Exec(file, head)
 	if err != nil {
 		log.Panic("insert dependency ", err)
@@ -452,6 +500,7 @@ func (db *WriterDB) InsertHeadDependency(file, head string) {
 
 func (db *WriterDB) Close() {
 	db.selectFileInfo.Close()
+	db.selectFileDeps.Close()
 
 	db.insertFile.Close()
 	db.insertSymb.Close()
@@ -462,6 +511,7 @@ func (db *WriterDB) Close() {
 	db.insertDepend.Close()
 
 	db.delFileRef.Close()
+	db.delDepends.Close()
 
 	db.conn.Close()
 }

@@ -26,130 +26,15 @@
 package main
 
 import (
-	"container/list"
 	"flag"
-	fsnotify "gopkg.in/fsnotify.v1"
 	"log"
 	"net"
 	"net/rpc"
 	"net/rpc/jsonrpc"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"regexp"
 	"sync"
 )
-
-func processFile(files chan string, wg *sync.WaitGroup, parser *Parser) {
-	wg.Add(1)
-	defer wg.Done()
-
-	// start exploring files
-	for {
-		file, ok := <-files
-
-		if !ok {
-			return
-		}
-
-		log.Println("parsing", file)
-		parser.Parse(file)
-	}
-}
-
-func explorePathToParse(path string,
-	visitDir func(string),
-	visitC func(string)) *list.List {
-
-	path = filepath.Clean(path)
-
-	f, err := os.Open(path)
-	if err != nil {
-		log.Println(err, "opening", path, ", ignoring")
-		return nil
-	}
-	defer f.Close()
-
-	info, err := f.Stat()
-	if err != nil {
-		log.Println(err, "stating", path, ", ignoring")
-		return nil
-	}
-
-	// visit file
-	if !info.IsDir() {
-		// ignore non-C files
-		validC, _ := regexp.MatchString(`.*\.c$`, path)
-		if validC {
-			visitC(path)
-		}
-		return nil
-	} else {
-		visitDir(path)
-	}
-
-	// add all the files in the directory to explore
-	dirFiles, err := f.Readdir(0)
-	if err != nil {
-		log.Println(err, " readdir ", path, ", ignoring")
-		return nil
-	}
-
-	toExplore := list.New()
-	for _, subf := range dirFiles {
-		// ignore hidden files
-		if subf.Name()[0] == '.' {
-			continue
-		}
-
-		toExplore.PushBack(path + "/" + subf.Name())
-	}
-	return toExplore
-}
-
-func traversePath(path string, visitDir func(string), visitC func(string)) {
-	toExplore := list.New()
-	toExplore.PushBack(path)
-
-	for toExplore.Len() > 0 {
-		// dequeue first path
-		path := toExplore.Front()
-		toExplore.Remove(path)
-
-		newDirs := explorePathToParse(
-			path.Value.(string),
-			visitDir,
-			visitC)
-		if newDirs != nil {
-			toExplore.PushBackList(newDirs)
-		}
-	}
-}
-
-func handleChange(event fsnotify.Event,
-	db *WriterDB,
-	watcher *fsnotify.Watcher,
-	files chan string) {
-
-	visitorDir := func(path string) {
-		// add watcher to directory
-		watcher.Add(path)
-	}
-	visitorC := func(path string) {
-		// add watcher
-		watcher.Add(path)
-		// put file in channel
-		files <- path
-	}
-
-	switch {
-	case event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Chmod) != 0:
-		traversePath(event.Name, visitorDir, visitorC)
-	case event.Op&(fsnotify.Remove|fsnotify.Rename) != 0:
-		watcher.Remove(event.Name)
-		db.RemoveFileReferences(filepath.Clean(event.Name))
-	}
-}
 
 func main() {
 	// path to symbols DB
@@ -199,66 +84,9 @@ func main() {
 	// create parser
 	parser := NewParser(db, indexDir)
 
-	// start indexing threads
-	files := make(chan string, nIndexingThreads)
-	defer close(files)
-
-	// start threads to process files
-	for i := 0; i < nIndexingThreads; i++ {
-		go processFile(files, &wg, parser)
-	}
-
-	// start file watcher
-	watcher, _ := fsnotify.NewWatcher()
-	defer watcher.Close()
-	go func() {
-		wg.Add(1)
-		defer wg.Done()
-		for {
-			select {
-			case event, ok := <-watcher.Events:
-				if !ok {
-					return
-				}
-				wr := db.NewWriter()
-				handleChange(event, wr, watcher, files)
-				wr.Close()
-			case err, ok := <-watcher.Errors:
-				if !ok {
-					return
-				}
-
-				log.Println("watcher error: ", err)
-			}
-		}
-	}()
-
-	// explore all the paths in indexDir and process all files
-	rd := db.NewReader()
-	removedFilesSet := rd.GetSetFilesInDB()
-	rd.Close()
-	visitorDir := func(path string) {
-		// add watcher to directory
-		watcher.Add(path)
-	}
-	visitorC := func(path string) {
-		// update set of removed files
-		delete(removedFilesSet, path)
-		// add watcher
-		watcher.Add(path)
-		// put file in channel
-		files <- path
-	}
-	for _, path := range indexDir {
-		traversePath(path, visitorDir, visitorC)
-	}
-
-	// remove from DB deleted files
-	wr := db.NewWriter()
-	for path := range removedFilesSet {
-		wr.RemoveFileReferences(path)
-	}
-	wr.Close()
+	// start files handler
+	StartFilesHandler(indexDir, nIndexingThreads, parser, db)
+	defer CloseFilesHandler()
 
 	// start serving requests
 	os.Remove(socketFile)
@@ -271,7 +99,7 @@ func main() {
 	defer lis.Close()
 
 	handler := rpc.NewServer()
-	rd = db.NewReader()
+	rd := db.NewReader()
 	handler.Register(&RequestHandler{rd})
 	go func() {
 		wg.Add(1)
