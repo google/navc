@@ -17,12 +17,18 @@ navc is in its early stages. There is still plenty of code to be written.
 * Implementations of a function pointer (is this possible?)
 * Assignments of a variable
 
-Requirements
+Installation
 ============
-For the daemon you need the following libraries:
-* libclang: https://github.com/sbinet/go-clang
-* fsnotify: https://github.com/go-fsnotify/fsnotify
-* sqlite3: https://github.com/mattn/go-sqlite3
+You need to have development headers for clang. In Ubuntu this is the package
+``libclang_dev``. Once this is installed, you need to simply run:
+
+```
+	CGO_CFLAGS="-I`llvm-config --includedir`" \
+	CGO_LDFLAGS="-L`llvm-config --libdir`" \
+	go get github.com/google/navc
+```
+
+The binary will be located in $GOPATH/bin/navc.
 
 For the vim plugin to work, you need vim with python support. You also need to
 include the jsonrpc file in the PYTHONPATH env variable. Examples can be found
