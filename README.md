@@ -19,8 +19,8 @@ navc is in its early stages. There is still plenty of code to be written.
 
 Installation
 ============
-You need to have development headers for clang. In Ubuntu this is the package
-``libclang_dev``. Once this is installed, you need to simply run:
+You need to have the development headers for clang. In Ubuntu this is the
+package ``libclang_dev``. Once this is installed, you need to simply run:
 
 ```
 	CGO_CFLAGS="-I`llvm-config --includedir`" \
