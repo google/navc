@@ -41,3 +41,20 @@ func (rh *RequestHandler) GetSymbolUses(use *Symbol, res *[]*Symbol) error {
 		return fmt.Errorf("Symbol use not found")
 	}
 }
+
+func (rh *RequestHandler) GetSymbolDef(use *Symbol, res *[]*Symbol) error {
+	def := rh.db.GetSymbolDef(use)
+	if def == nil {
+		// find all definitions with the same name
+		defs := rh.db.GetAllSymbolDefs(use)
+		if len(defs) > 0 {
+			*res = defs
+			return nil
+		} else {
+			return fmt.Errorf("Definition not found")
+		}
+	} else {
+		*res = []*Symbol{def}
+		return nil
+	}
+}

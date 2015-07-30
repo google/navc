@@ -108,3 +108,22 @@ except jsonrpc.RPCFault as e:
 	print >> sys.stderr, e.error_data
 EOF
 endfunction
+
+function! FindCursorSymbolDef()
+python << EOF
+try:
+	ret = conn().RequestHandler.GetSymbolDef(get_cursor_input())
+	if len(ret) > 1:
+		num = 1
+		for op in ret:
+			print '(%2d) %s %d' % (num, op['File'], op['Line'])
+			num += 1
+		ch = get_choice_int()
+		ch -= 1
+	else:
+		ch = 0
+	move_cursor(ret[ch]['File'], ret[ch]['Line'], ret[ch]['Col'] - 1)
+except jsonrpc.RPCFault as e:
+	print >> sys.stderr, e.error_data
+EOF
+endfunction

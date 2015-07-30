@@ -38,6 +38,8 @@ type ReaderDB struct {
 
 	selectSymbDecl *sqlite3.Stmt
 	selectSymbUses *sqlite3.Stmt
+	selectSymbDef  *sqlite3.Stmt
+	selectSymbDefs *sqlite3.Stmt
 }
 
 func NewReaderDB(conn *sqlite3.Conn) *ReaderDB {
@@ -82,6 +84,53 @@ func NewReaderDB(conn *sqlite3.Conn) *ReaderDB {
 		log.Panic("prepare select symbol uses ", err)
 	}
 
+	r.selectSymbDef, err = conn.Prepare(`
+	SELECT f1.path, fdd.def_line, fdd.def_col
+	    FROM files f1, files f2, symbol_decls sd, symbol_uses su,
+	         func_decs_defs fdd
+	    WHERE
+	        -- symbol decls and files join
+		f1.id = fdd.def_file AND
+		-- symbol use and files join
+		f2.id = su.file AND
+		-- symbol uses and symbol decls join
+		su.dec_file = sd.file AND
+		su.dec_line = sd.line AND
+		su.dec_col = sd.col AND
+		-- symbol decls and symbol defs join
+		sd.file = fdd.dec_file AND
+		sd.line = fdd.dec_line AND
+		sd.col = fdd.dec_col AND
+		-- select input
+		f2.path = ? AND su.line = ? AND su.col = ?;
+	`)
+	if err != nil {
+		log.Panic("prepare select symbol def ", err)
+	}
+
+	r.selectSymbDefs, err = conn.Prepare(`
+	SELECT f1.path, sd1.line, sd1.col
+	    FROM files f1, files f2, symbol_decls sd1, symbol_decls sd2,
+	         symbol_uses su
+	    WHERE
+	        -- symbol decls and files join
+		f1.id = sd1.file AND
+		-- file and symbol uses join
+		f2.id = su.file AND
+		-- symbol uses and symbol decls join
+		su.dec_file = sd2.file AND
+		su.dec_line = sd2.line AND
+		su.dec_col = sd2.col AND
+		-- symbol decls and symbol decls same USR
+		sd1.unisr = sd2.unisr AND
+		sd1.def = 1 AND
+		-- select input
+		f2.path = ? AND su.line = ? AND su.col = ?;
+	`)
+	if err != nil {
+		log.Panic("prepare select symbol defs ", err)
+	}
+
 	return r
 }
 
@@ -111,7 +160,7 @@ func (db *ReaderDB) GetSymbolUses(use *Symbol) []*Symbol {
 	err := db.selectSymbUses.Query(use.File, use.Line, use.Col)
 	switch {
 	case err == io.EOF:
-		return nil
+		return ret
 	case err != nil:
 		log.Panic("select symbol uses ", err)
 	}
@@ -163,9 +212,60 @@ func (db *ReaderDB) GetSetFilesInDB() map[string]bool {
 	return fileSet
 }
 
+func (db *ReaderDB) GetSymbolDef(use *Symbol) *Symbol {
+	err := db.selectSymbDef.Query(use.File, use.Line, use.Col)
+	switch {
+	case err == io.EOF:
+		return nil
+	case err != nil:
+		log.Panic("select symbol def ", err)
+	}
+	defer db.selectSymbDef.Reset()
+
+	s := new(Symbol)
+
+	err = db.selectSymbDef.Scan(&s.File, &s.Line, &s.Col)
+	if err != nil {
+		log.Panic("scan symbol ", err)
+	}
+
+	return s
+}
+
+func (db *ReaderDB) GetAllSymbolDefs(use *Symbol) []*Symbol {
+	ret := []*Symbol{}
+
+	err := db.selectSymbDefs.Query(use.File, use.Line, use.Col)
+	switch {
+	case err == io.EOF:
+		return ret
+	case err != nil:
+		log.Panic("select symbol uses ", err)
+	}
+	defer db.selectSymbDefs.Reset()
+
+	for {
+		s := new(Symbol)
+
+		err = db.selectSymbDefs.Scan(&s.File, &s.Line, &s.Col)
+		if err != nil {
+			log.Panic("scan symbol ", err)
+		}
+
+		ret = append(ret, s)
+
+		if db.selectSymbDefs.Next() == io.EOF {
+			break
+		}
+	}
+	return ret
+}
+
 func (db *ReaderDB) Close() {
 	db.selectSymbDecl.Close()
 	db.selectSymbUses.Close()
+	db.selectSymbDef.Close()
+	db.selectSymbDefs.Close()
 
 	db.conn.Close()
 }
