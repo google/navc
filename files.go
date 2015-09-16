@@ -22,7 +22,6 @@ package main
  * should rely on this file to know if a file was explored or not. */
 
 import (
-	"container/list"
 	fsnotify "gopkg.in/fsnotify.v1"
 	"log"
 	"os"
@@ -30,6 +29,9 @@ import (
 	"regexp"
 	"sync"
 )
+
+const validCString string = `^[^\.].*\.c$`
+const validHString string = `^[^\.].*\.h$`
 
 var files chan string
 var wg sync.WaitGroup
@@ -76,73 +78,31 @@ func processFile(parser *Parser) {
 	}
 }
 
-func explorePathToParse(path string,
-	visitDir func(string),
-	visitC func(string)) *list.List {
-
-	path = filepath.Clean(path)
-
-	f, err := os.Open(path)
-	if err != nil {
-		log.Println(err, "opening", path, ", ignoring")
-		return nil
-	}
-	defer f.Close()
-
-	info, err := f.Stat()
-	if err != nil {
-		log.Println(err, "stating", path, ", ignoring")
-		return nil
-	}
-
-	// visit file
-	if !info.IsDir() {
-		// ignore non-C files
-		validC, _ := regexp.MatchString(`.*\.c$`, path)
-		if validC {
-			visitC(path)
-		}
-		return nil
-	} else {
-		visitDir(path)
-	}
-
-	// add all the files in the directory to explore
-	dirFiles, err := f.Readdir(0)
-	if err != nil {
-		log.Println(err, " readdir ", path, ", ignoring")
-		return nil
-	}
-
-	toExplore := list.New()
-	for _, subf := range dirFiles {
-		// ignore hidden files
-		if subf.Name()[0] == '.' {
-			continue
-		}
-
-		toExplore.PushBack(path + "/" + subf.Name())
-	}
-	return toExplore
-}
-
 func traversePath(path string, visitDir func(string), visitC func(string)) {
-	toExplore := list.New()
-	toExplore.PushBack(path)
-
-	for toExplore.Len() > 0 {
-		// dequeue first path
-		path := toExplore.Front()
-		toExplore.Remove(path)
-
-		newDirs := explorePathToParse(
-			path.Value.(string),
-			visitDir,
-			visitC)
-		if newDirs != nil {
-			toExplore.PushBackList(newDirs)
+	filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			log.Println("error opening ", path, " igoring")
+			return filepath.SkipDir
 		}
-	}
+
+		// visit file
+		if info.IsDir() {
+			if info.Name()[0] == '.' {
+				return filepath.SkipDir
+			} else {
+				visitDir(path)
+				return nil
+			}
+		} else {
+			// ignore non-C files
+			validC, _ := regexp.MatchString(validCString, path)
+			if validC {
+				visitC(path)
+			}
+		}
+
+		return nil
+	})
 }
 
 func removeFileAndReparseDepends(file string, db *WriterDB) {
@@ -156,8 +116,8 @@ func removeFileAndReparseDepends(file string, db *WriterDB) {
 
 func handleFileChange(event fsnotify.Event) {
 
-	validC, _ := regexp.MatchString(`.*\.c$`, event.Name)
-	validH, _ := regexp.MatchString(`.*\.h$`, event.Name)
+	validC, _ := regexp.MatchString(validCString, event.Name)
+	validH, _ := regexp.MatchString(validHString, event.Name)
 
 	switch {
 	case validC:
