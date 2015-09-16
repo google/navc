@@ -119,18 +119,31 @@ func handleFileChange(event fsnotify.Event) {
 	validC, _ := regexp.MatchString(validCString, event.Name)
 	validH, _ := regexp.MatchString(validHString, event.Name)
 
+	db := <-writer
+	defer func() { writer <- db }()
+
 	switch {
 	case validC:
-		files <- event.Name
-	case validH:
-		db := <-writer
-		exist, uptodate, _, err := db.UptodateFile(event.Name)
-
-		if err != nil || (exist && !uptodate) {
-			removeFileAndReparseDepends(filepath.Clean(event.Name), db)
+		switch {
+		case event.Op&(fsnotify.Create|fsnotify.Write) != 0:
+			files <- event.Name
+		case event.Op&(fsnotify.Remove|fsnotify.Rename) != 0:
+			db.RemoveFileReferences(event.Name)
 		}
-
-		writer <- db
+	case validH:
+		exist, uptodate, _, err := db.UptodateFile(event.Name)
+		switch {
+		case err != nil:
+			return
+		case event.Op&(fsnotify.Write) != 0:
+			if exist && !uptodate {
+				removeFileAndReparseDepends(filepath.Clean(event.Name), db)
+			}
+		case event.Op&(fsnotify.Remove|fsnotify.Rename) != 0:
+			if exist {
+				removeFileAndReparseDepends(filepath.Clean(event.Name), db)
+			}
+		}
 	}
 }
 
