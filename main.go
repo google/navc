@@ -60,6 +60,17 @@ func main() {
 	var indexDir []string
 	if len(flag.Args()) > 0 {
 		indexDir = flag.Args()
+		for _, path := range indexDir {
+			fi, err := os.Stat(path)
+			if err != nil {
+				log.Println("unable to access ", path, err)
+				return
+			}
+			if !fi.IsDir() {
+				log.Println("only dir inputs allowed")
+				return
+			}
+		}
 	} else {
 		indexDir = []string{"."}
 	}
