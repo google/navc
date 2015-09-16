@@ -154,21 +154,73 @@ func removeFileAndReparseDepends(file string, db *WriterDB) {
 	}
 }
 
-func handleChange(event fsnotify.Event,
-	watcher *fsnotify.Watcher,
-	files chan string) {
+func handleFileChange(event fsnotify.Event) {
 
-	db := <-writer
+	validC, _ := regexp.MatchString(`.*\.c$`, event.Name)
+	validH, _ := regexp.MatchString(`.*\.h$`, event.Name)
 
 	switch {
-	case event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Chmod) != 0:
-		removeFileAndReparseDepends(filepath.Clean(event.Name), db)
+	case validC:
+		files <- event.Name
+	case validH:
+		db := <-writer
+		exist, uptodate, _, err := db.UptodateFile(event.Name)
+
+		if err != nil || (exist && !uptodate) {
+			removeFileAndReparseDepends(filepath.Clean(event.Name), db)
+		}
+
+		writer <- db
+	}
+}
+
+func handleDirChange(event fsnotify.Event) {
+	switch {
+	case event.Op&(fsnotify.Create) != 0:
+		// explore the new dir
+		visitorDir := func(path string) {
+			// add watcher to directory
+			watcher.Add(path)
+		}
+		visitorC := func(path string) {
+			// put file in channel
+			files <- path
+		}
+		traversePath(event.Name, visitorDir, visitorC)
 	case event.Op&(fsnotify.Remove|fsnotify.Rename) != 0:
+		// remove watcher from dir
 		watcher.Remove(event.Name)
-		removeFileAndReparseDepends(filepath.Clean(event.Name), db)
+	}
+}
+
+func isDirectory(path string) (bool, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return false, err
+	} else {
+		return fi.IsDir(), nil
+	}
+}
+
+func handleChange(event fsnotify.Event) {
+
+	// ignore if hidden
+	if filepath.Base(event.Name)[0] == '.' {
+		return
 	}
 
-	writer <- db
+	// first, we need to check if the file is a directory or not
+	isDir, err := isDirectory(event.Name)
+	if err != nil {
+		// ignoring this event
+		return
+	}
+
+	if isDir {
+		handleDirChange(event)
+	} else {
+		handleFileChange(event)
+	}
 }
 
 func StartFilesHandler(indexDir []string, nIndexingThreads int, parser *Parser,
@@ -194,7 +246,7 @@ func StartFilesHandler(indexDir []string, nIndexingThreads int, parser *Parser,
 				if !ok {
 					return
 				}
-				handleChange(event, watcher, files)
+				handleChange(event)
 			case err, ok := <-watcher.Errors:
 				if !ok {
 					return
@@ -216,8 +268,6 @@ func StartFilesHandler(indexDir []string, nIndexingThreads int, parser *Parser,
 	visitorC := func(path string) {
 		// update set of removed files
 		delete(removedFilesSet, path)
-		// add watcher
-		watcher.Add(path)
 		// put file in channel
 		files <- path
 	}
@@ -247,9 +297,8 @@ func UpdateDependency(file, dep string) bool {
 
 	if !exist {
 		wr.InsertFile(dep, fi)
-		watcher.Add(file)
 	} else if !uptodate {
-		removeFileAndReparseDepends(file, wr)
+		removeFileAndReparseDepends(dep, wr)
 		files <- file
 		return false
 	}
