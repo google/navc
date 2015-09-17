@@ -12,17 +12,14 @@
 " See the License for the specific language governing permissions and
 " limitations under the License.
 
-" Very simple plugin that takes the symbol in the current cursor, asks navc
-" daemon for its declaration, and point the cursor in the declaration. For
-" this to run properly, the PYTHONPATH has to be set. From the root of the
-" project directory:
-" 	PYTHONPATH=third_party/jsonrpc/ vim
+" Very simple plugin that takes the symbol in the current cursor, query navc
+" daemon and point the cursor to the disered location. For this to run
+" properly, the PYTHONPATH has to be set. From the root of the project
+" directory: PYTHONPATH=third_party/jsonrpc/ vim
 "
 " To use, simply source this file in vim, put the cursor on top of the symbol
-" of interest, and call the function FindCursorSymbolDecl(). In vim
-" 	:source editor/vim/navc.vim
-" 	(move cursor to symbol)
-" 	:call FindCursorSymbolDecl()
+" of interest, and call the function FindCursorSymbolDecl(). In vim :source
+" editor/vim/navc.vim (move cursor to symbol) :call FindCursorSymbolDecl()
 
 if !has('python')
 	echo "Error: Required vim compiled with +python"
@@ -37,6 +34,8 @@ import os
 import sys
 
 fname_char = re.compile('[a-zA-Z_]')
+
+prev_locs = []
 
 def find_start_cur_symbol():
 	row, col = vim.current.window.cursor
@@ -74,9 +73,15 @@ def get_cursor_input():
 
 	return args
 
-def move_cursor(fname, line, col):
+def _move_cursor(fname, line, col):
 	vim.command('edit %s' % fname)
 	vim.current.window.cursor = (line, col)
+
+def move_cursor(fname, line, col):
+	prow, pcol = vim.current.window.cursor
+	pfname = vim.current.buffer.name
+	prev_locs.append((pfname, prow, pcol))
+	_move_cursor(fname, line, col)
 
 def get_file_line(fname, line):
 	# TODO: this is less than optimal, but it does the trick. A vim
@@ -148,3 +153,16 @@ except ValueError:
 	pass
 EOF
 endfunction
+
+function! MoveCursorToPrev()
+python << EOF
+if len(prev_locs) > 0:
+	pfname, prow, pcol = prev_locs.pop()
+	_move_cursor(pfname, prow, pcol)
+EOF
+endfunction
+
+nnoremap <C-z>e :call FindCursorSymbolDecl()<ENTER>
+nnoremap <C-z>b :call MoveCursorToPrev()<ENTER>
+nnoremap <C-z>u :call FindCursorSymbolUses()<ENTER>
+nnoremap <C-z>d :call FindCursorSymbolDef()<ENTER>
