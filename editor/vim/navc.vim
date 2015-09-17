@@ -46,7 +46,7 @@ def find_start_cur_symbol():
 
 def get_choice():
 	vim.command("call inputsave()")
-	vim.command("let choice = input('Input Choice: ')")
+	vim.command("let choice = input('Input Choice<empty to cancel>: ')")
 	vim.command("call inputrestore()")
 	return vim.eval("choice")
 
@@ -54,6 +54,8 @@ def get_choice_int():
 	# TODO: we need to make sure that a number was given and that it is
 	# within boundaries.
 	ch = get_choice()
+	if not ch:
+		raise ValueError('No choice')
 	return int(ch)
 
 def conn():
@@ -75,6 +77,18 @@ def get_cursor_input():
 def move_cursor(fname, line, col):
 	vim.command('edit %s' % fname)
 	vim.current.window.cursor = (line, col)
+
+def get_file_line(fname, line):
+	# TODO: this is less than optimal, but it does the trick. A vim
+	# implementation mey be more efficient.
+	with open(fname, 'r') as f:
+		return f.readlines()[line - 1].strip()
+
+def print_error(s):
+	vim.command(':echohl Error | echo "'+s+'" | echohl None')
+
+def print_warn(s):
+	vim.command(':echohl WarningMsg | echo "'+s+'" | echohl None')
 EOF
 
 " This function will find the declaration of the symbol currently under the
@@ -86,7 +100,7 @@ try:
 	ret = conn().RequestHandler.GetSymbolDecl(get_cursor_input())
 	move_cursor(ret['File'], ret['Line'], ret['Col'] - 1)
 except jsonrpc.RPCFault as e:
-	print >> sys.stderr, e.error_data
+	print_error(e.error_data)
 
 EOF
 endfunction
@@ -99,13 +113,16 @@ try:
 	ret = conn().RequestHandler.GetSymbolUses(get_cursor_input())
 	num = 1
 	for op in ret:
-		print '(%2d) %s %d' % (num, op['File'], op['Line'])
+		line = get_file_line(op['File'], op['Line'])
+		print '(%2d) %s %d\n     %s' % (num, op['File'], op['Line'], line)
 		num += 1
 	ch = get_choice_int()
 	ch -= 1
 	move_cursor(ret[ch]['File'], ret[ch]['Line'], ret[ch]['Col'] - 1)
 except jsonrpc.RPCFault as e:
-	print >> sys.stderr, e.error_data
+	print_error(e.error_data)
+except ValueError:
+	pass
 EOF
 endfunction
 
@@ -116,7 +133,9 @@ try:
 	if len(ret) > 1:
 		num = 1
 		for op in ret:
-			print '(%2d) %s %d' % (num, op['File'], op['Line'])
+			line = get_file_line(op['File'], op['Line'])
+			print "(%2d) %s %d\n     %s" % \
+				(num, op['File'], op['Line'], line)
 			num += 1
 		ch = get_choice_int()
 		ch -= 1
@@ -124,6 +143,8 @@ try:
 		ch = 0
 	move_cursor(ret[ch]['File'], ret[ch]['Line'], ret[ch]['Col'] - 1)
 except jsonrpc.RPCFault as e:
-	print >> sys.stderr, e.error_data
+	print_error(e.error_data)
+except ValueError:
+	pass
 EOF
 endfunction
