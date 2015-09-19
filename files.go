@@ -87,7 +87,7 @@ func traversePath(path string, visitDir func(string), visitC func(string)) {
 
 		// visit file
 		if info.IsDir() {
-			if info.Name()[0] == '.' {
+			if info.Name() != "." && info.Name()[0] == '.' {
 				return filepath.SkipDir
 			} else {
 				visitDir(path)
