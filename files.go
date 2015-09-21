@@ -27,6 +27,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 )
 
@@ -37,6 +38,10 @@ var files chan string
 var wg sync.WaitGroup
 var watcher *fsnotify.Watcher
 var writer chan *WriterDB
+var sysInclDir map[string]bool = map[string]bool{
+	"/usr/include/": true,
+	"/usr/lib/":     true,
+}
 
 func uptodateFile(file string) bool {
 	wr := <-writer
@@ -78,7 +83,7 @@ func processFile(parser *Parser) {
 	}
 }
 
-func traversePath(path string, visitDir func(string), visitC func(string)) {
+func traversePath(path string, visitDir func(string), visitC func(string), visitRest func(string)) {
 	filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			log.Println("error opening ", path, " igoring")
@@ -98,6 +103,8 @@ func traversePath(path string, visitDir func(string), visitC func(string)) {
 			validC, _ := regexp.MatchString(validCString, path)
 			if validC {
 				visitC(path)
+			} else {
+				visitRest(path)
 			}
 		}
 
@@ -159,7 +166,10 @@ func handleDirChange(event fsnotify.Event) {
 			// put file in channel
 			files <- path
 		}
-		traversePath(event.Name, visitorDir, visitorC)
+		visitorRest := func(path string) {
+			// nothing to do
+		}
+		traversePath(event.Name, visitorDir, visitorC, visitorRest)
 	case event.Op&(fsnotify.Remove|fsnotify.Rename) != 0:
 		// remove watcher from dir
 		watcher.Remove(event.Name)
@@ -194,6 +204,16 @@ func handleChange(event fsnotify.Event) {
 	} else {
 		handleFileChange(event)
 	}
+}
+
+func isSysInclDir(path string) bool {
+	for incl := range sysInclDir {
+		if strings.HasPrefix(path, incl) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func StartFilesHandler(indexDir []string, nIndexingThreads int, parser *Parser,
@@ -232,7 +252,7 @@ func StartFilesHandler(indexDir []string, nIndexingThreads int, parser *Parser,
 
 	// explore all the paths in indexDir and process all files
 	rd := db.NewReader()
-	removedFilesSet := rd.GetSetFilesInDB()
+	notExplored := rd.GetSetFilesInDB()
 	rd.Close()
 	visitorDir := func(path string) {
 		// add watcher to directory
@@ -240,20 +260,39 @@ func StartFilesHandler(indexDir []string, nIndexingThreads int, parser *Parser,
 	}
 	visitorC := func(path string) {
 		// update set of removed files
-		delete(removedFilesSet, path)
+		delete(notExplored, path)
 		// put file in channel
 		files <- path
 	}
+	visitorRest := func(path string) {
+		if notExplored[path] {
+			// update set of removed files
+			delete(notExplored, path)
+
+			db := <-writer
+			_, uptodate, _, err := db.UptodateFile(path)
+			if err != nil && !uptodate {
+				removeFileAndReparseDepends(path, db)
+			}
+			writer <- db
+		}
+	}
 	for _, path := range indexDir {
-		traversePath(path, visitorDir, visitorC)
+		traversePath(path, visitorDir, visitorC, visitorRest)
 	}
 
-	// remove from DB deleted files
-	wr := <-writer
-	for path := range removedFilesSet {
-		wr.RemoveFileReferences(path)
+	// check files not explored by now
+	for path := range notExplored {
+		if isSysInclDir(path) {
+			// if system include dir, visit normally
+			visitorRest(path)
+		} else {
+			// if not, then delete
+			wr := <-writer
+			wr.RemoveFileReferences(path)
+			writer <- wr
+		}
 	}
-	writer <- wr
 }
 
 func UpdateDependency(file, dep string) bool {
