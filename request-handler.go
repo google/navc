@@ -19,10 +19,10 @@ package main
 import "fmt"
 
 type RequestHandler struct {
-	db *ReaderDB
+	db *SymbolsDB
 }
 
-func (rh *RequestHandler) GetSymbolDecl(use *Symbol, res *Symbol) error {
+func (rh *RequestHandler) GetSymbolDecl(use *SymbolLoc, res *SymbolLoc) error {
 	dec := rh.db.GetSymbolDecl(use)
 	if dec != nil {
 		*res = *dec
@@ -32,7 +32,7 @@ func (rh *RequestHandler) GetSymbolDecl(use *Symbol, res *Symbol) error {
 	}
 }
 
-func (rh *RequestHandler) GetSymbolUses(use *Symbol, res *[]*Symbol) error {
+func (rh *RequestHandler) GetSymbolUses(use *SymbolLoc, res *[]*SymbolLoc) error {
 	uses := rh.db.GetSymbolUses(use)
 	if len(uses) > 0 {
 		*res = uses
@@ -42,7 +42,7 @@ func (rh *RequestHandler) GetSymbolUses(use *Symbol, res *[]*Symbol) error {
 	}
 }
 
-func (rh *RequestHandler) GetSymbolDef(use *Symbol, res *[]*Symbol) error {
+func (rh *RequestHandler) GetSymbolDef(use *SymbolLoc, res *[]*SymbolLoc) error {
 	def := rh.db.GetSymbolDef(use)
 	if def == nil {
 		// find all definitions with the same name
@@ -54,7 +54,7 @@ func (rh *RequestHandler) GetSymbolDef(use *Symbol, res *[]*Symbol) error {
 			return fmt.Errorf("Definition not found")
 		}
 	} else {
-		*res = []*Symbol{def}
+		*res = []*SymbolLoc{def}
 		return nil
 	}
 }

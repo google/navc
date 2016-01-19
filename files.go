@@ -37,17 +37,17 @@ const validHString string = `^[^\.].*\.h$`
 var files chan string
 var wg sync.WaitGroup
 var watcher *fsnotify.Watcher
-var writer chan *WriterDB
+var symbDB chan *SymbolsDB
 var sysInclDir map[string]bool = map[string]bool{
 	"/usr/include/": true,
 	"/usr/lib/":     true,
 }
 
 func uptodateFile(file string) bool {
-	wr := <-writer
-	defer func() { writer <- wr }()
+	db := <-symbDB
+	defer func() { symbDB <- db }()
 
-	exist, uptodate, fi, err := wr.UptodateFile(file)
+	exist, uptodate, err := db.UptodateFile(file)
 
 	if err != nil {
 		// if there is an error with the dependency, we are going to
@@ -58,8 +58,7 @@ func uptodateFile(file string) bool {
 	if exist && uptodate {
 		return true
 	} else {
-		wr.RemoveFileReferences(file)
-		wr.InsertFile(file, fi)
+		db.RemoveFileReferences(file)
 		return false
 	}
 }
@@ -112,7 +111,7 @@ func traversePath(path string, visitDir func(string), visitC func(string), visit
 	})
 }
 
-func removeFileAndReparseDepends(file string, db *WriterDB) {
+func removeFileAndReparseDepends(file string, db *SymbolsDB) {
 	deps := db.RemoveFileDepsReferences(file)
 	db.RemoveFileReferences(file)
 
@@ -126,8 +125,8 @@ func handleFileChange(event fsnotify.Event) {
 	validC, _ := regexp.MatchString(validCString, event.Name)
 	validH, _ := regexp.MatchString(validHString, event.Name)
 
-	db := <-writer
-	defer func() { writer <- db }()
+	db := <-symbDB
+	defer func() { symbDB <- db }()
 
 	switch {
 	case validC:
@@ -138,7 +137,7 @@ func handleFileChange(event fsnotify.Event) {
 			db.RemoveFileReferences(event.Name)
 		}
 	case validH:
-		exist, uptodate, _, err := db.UptodateFile(event.Name)
+		exist, uptodate, err := db.UptodateFile(event.Name)
 		switch {
 		case err != nil:
 			return
@@ -217,11 +216,11 @@ func isSysInclDir(path string) bool {
 }
 
 func StartFilesHandler(indexDir []string, nIndexingThreads int, parser *Parser,
-	db *DBConnFactory) {
+	db *SymbolsDB) {
 
 	files = make(chan string, nIndexingThreads)
-	writer = make(chan *WriterDB, 1)
-	writer <- db.NewWriter()
+	symbDB = make(chan *SymbolsDB, 1)
+	symbDB <- db
 
 	// start threads to process files
 	for i := 0; i < nIndexingThreads; i++ {
@@ -251,9 +250,7 @@ func StartFilesHandler(indexDir []string, nIndexingThreads int, parser *Parser,
 	}()
 
 	// explore all the paths in indexDir and process all files
-	rd := db.NewReader()
-	notExplored := rd.GetSetFilesInDB()
-	rd.Close()
+	notExplored := db.GetSetFilesInDB()
 	visitorDir := func(path string) {
 		// add watcher to directory
 		watcher.Add(path)
@@ -269,12 +266,12 @@ func StartFilesHandler(indexDir []string, nIndexingThreads int, parser *Parser,
 			// update set of removed files
 			delete(notExplored, path)
 
-			db := <-writer
-			_, uptodate, _, err := db.UptodateFile(path)
+			db := <-symbDB
+			_, uptodate, err := db.UptodateFile(path)
 			if err != nil && !uptodate {
 				removeFileAndReparseDepends(path, db)
 			}
-			writer <- db
+			symbDB <- db
 		}
 	}
 	for _, path := range indexDir {
@@ -288,18 +285,18 @@ func StartFilesHandler(indexDir []string, nIndexingThreads int, parser *Parser,
 			visitorRest(path)
 		} else {
 			// if not, then delete
-			wr := <-writer
-			wr.RemoveFileReferences(path)
-			writer <- wr
+			db := <-symbDB
+			db.RemoveFileReferences(path)
+			symbDB <- db
 		}
 	}
 }
 
-func UpdateDependency(file, dep string) bool {
-	wr := <-writer
-	defer func() { writer <- wr }()
+func UpdateDependency(fileDB *TUSymbolsDB, file, dep string) bool {
+	db := <-symbDB
+	defer func() { symbDB <- db }()
 
-	exist, uptodate, fi, err := wr.UptodateFile(dep)
+	exist, uptodate, err := db.UptodateFile(dep)
 
 	if err != nil {
 		// if there is an error with the dependency, we are going to
@@ -307,24 +304,21 @@ func UpdateDependency(file, dep string) bool {
 		return true
 	}
 
-	if !exist {
-		wr.InsertFile(dep, fi)
-	} else if !uptodate {
-		removeFileAndReparseDepends(dep, wr)
+	if exist && !uptodate {
+		removeFileAndReparseDepends(dep, db)
 		files <- file
 		return false
 	}
 
-	wr.InsertDependency(file, dep)
+	db.InsertDependency(fileDB, dep)
 	return true
 }
 
 func CloseFilesHandler() {
 	close(files)
 
-	wr := <-writer
-	wr.Close()
-	close(writer)
+	<-symbDB
+	close(symbDB)
 
 	watcher.Close()
 

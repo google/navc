@@ -14,13 +14,8 @@
  * limitations under the License.
  */
 
-/* TODO: We have a problem with file dependencies. What if header files change?
- * All files dependent to this one should also be updated recursively. What
- * if the header is removed? Where would all the symbols go? What if the header
- * shows up again?
- *
- * We need to solve all this issues and it may require plenty of changes in the
- * symbols DB.
+/* TODO: We have a problem with file dependencies. What if the header is
+ * removed and shows up again?
  */
 
 package main
@@ -38,8 +33,8 @@ import (
 
 func main() {
 	// path to symbols DB
-	var dbFile string
-	flag.StringVar(&dbFile, "db", ".navc_dbsymbols", "Path to symbols path")
+	var dbDir string
+	flag.StringVar(&dbDir, "db", ".navc_dbsymbols", "Path to symbols DB dir")
 
 	// number of parallel indexing threads
 	var nIndexingThreads int
@@ -85,12 +80,11 @@ func main() {
 
 	// if we need to reset the database, erase the old one
 	if resetDb {
-		os.Remove(dbFile)
+		os.RemoveAll(dbDir)
 	}
 
 	// open databased of symbols
-	db := NewDBConnFactory(dbFile)
-	defer db.Close()
+	db := NewSymbolsDB(dbDir)
 
 	// create parser
 	parser := NewParser(db, indexDir)
@@ -110,8 +104,7 @@ func main() {
 	defer lis.Close()
 
 	handler := rpc.NewServer()
-	rd := db.NewReader()
-	handler.Register(&RequestHandler{rd})
+	handler.Register(&RequestHandler{db})
 	go func() {
 		wg.Add(1)
 		defer wg.Done()
@@ -132,7 +125,6 @@ func main() {
 			codec.Close()
 		}
 	}()
-	defer rd.Close()
 
 	// wait until ctl-c is pressed
 	select {

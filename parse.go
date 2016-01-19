@@ -26,7 +26,7 @@ import (
 )
 
 type Parser struct {
-	db *DBConnFactory
+	db *SymbolsDB
 
 	cas map[string][]string
 }
@@ -134,7 +134,7 @@ func getCompArgs(command, path string) []string {
 	return args
 }
 
-func NewParser(db *DBConnFactory, inputDirs []string) *Parser {
+func NewParser(db *SymbolsDB, inputDirs []string) *Parser {
 	ret := &Parser{db, make(map[string][]string)}
 
 	// read compilation args db and fix files paths
@@ -165,16 +165,24 @@ func NewParser(db *DBConnFactory, inputDirs []string) *Parser {
 	return ret
 }
 
-func getSymbolFromCursor(cursor *clang.Cursor) *Symbol {
+func getSymbolFromCursor(db *TUSymbolsDB, cursor *clang.Cursor) (*SymbolInfo, string) {
+	if cursor.IsNull() {
+		return nil, ""
+	}
+
 	f, line, col, _ := cursor.Location().GetFileLocation()
 	fName := filepath.Clean(f.Name())
-	return &Symbol{
-		cursor.Spelling(),
-		cursor.USR(),
-		fName,
-		int(line),
-		int(col),
-	}
+	return &SymbolInfo{
+		id: SymbolID{
+			db.Encode(cursor.Spelling()),
+			db.Encode(cursor.USR()),
+		},
+		loc: SymbolLoc{
+			db.Encode(fName),
+			int16(line),
+			int16(col),
+		},
+	}, fName
 }
 
 func (pa *Parser) Parse(file string) {
@@ -191,17 +199,20 @@ func (pa *Parser) Parse(file string) {
 	tu := idx.Parse(file, args, nil, clang.TU_DetailedPreprocessingRecord)
 	defer tu.Dispose()
 
-	writer := pa.db.NewWriter()
-	defer writer.Close()
+	db, err := pa.db.NewTUSymbolsDB(file)
+	if err != nil {
+		log.Panic("unable to get new tudb", file, err)
+	}
+	defer pa.db.SaveTUSymbolsDB(db)
 
 	visitNode := func(cursor, parent clang.Cursor) clang.ChildVisitResult {
 		if cursor.IsNull() {
 			return clang.CVR_Continue
 		}
 
-		cur := getSymbolFromCursor(&cursor)
+		cur, curFile := getSymbolFromCursor(db, &cursor)
 
-		if cur.File == "" || cur.File == "." {
+		if curFile == "" || curFile == "." {
 			// ignore system code
 			return clang.CVR_Continue
 		}
@@ -212,42 +223,42 @@ func (pa *Parser) Parse(file string) {
 				cursor.Kind().Spelling(),
 				cursor.Spelling(),
 				cursor.USR())
-			log.Println(cur.File, ":", cur.Line, cur.Col)
+			log.Println(curFile, ":", cur.loc.Line, cur.loc.Col)
 		}
 		////////////////////////////////////
 
-		if !addedDepends[cur.File] {
-			if !UpdateDependency(file, cur.File) {
+		if !addedDepends[curFile] {
+			if !UpdateDependency(db, file, curFile) {
 				// The header is not uptodate. Cancel this
 				// parsing to start over with this file
 				return clang.CVR_Break
 			}
-			addedDepends[cur.File] = true
+			addedDepends[curFile] = true
 		}
 
 		switch cursor.Kind() {
 		case clang.CK_FunctionDecl:
 			defCursor := cursor.DefinitionCursor()
 			if !defCursor.IsNull() {
-				def := getSymbolFromCursor(&defCursor)
-				writer.InsertFuncSymb(cur, def)
+				def, _ := getSymbolFromCursor(db, &defCursor)
+				db.InsertSymbolDeclWithDef(cur, def)
 			} else {
-				writer.InsertSymbol(cur)
+				db.InsertSymbolDecl(cur)
 			}
 		case clang.CK_VarDecl:
-			writer.InsertSymbol(cur)
+			db.InsertSymbolDecl(cur)
 		case clang.CK_ParmDecl:
 			if cursor.Spelling() != "" {
-				writer.InsertParamDecl(cur)
+				db.InsertSymbolDecl(cur)
 			}
 		case clang.CK_CallExpr:
 			decCursor := cursor.Referenced()
-			dec := getSymbolFromCursor(&decCursor)
-			writer.InsertFuncCall(cur, dec)
+			dec, _ := getSymbolFromCursor(db, &decCursor)
+			db.InsertSymbolUse(cur, dec, true)
 		case clang.CK_DeclRefExpr:
 			decCursor := cursor.Referenced()
-			dec := getSymbolFromCursor(&decCursor)
-			writer.InsertSymbolUse(cur, dec)
+			dec, _ := getSymbolFromCursor(db, &decCursor)
+			db.InsertSymbolUse(cur, dec, false)
 		}
 
 		// TODO: eventually we need to continue on some cases for
