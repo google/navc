@@ -131,6 +131,8 @@ type tuSymbolsDBCache struct {
 	tudb  *TUSymbolsDB
 	mtime time.Time
 	path  string
+
+	accTime time.Time
 }
 
 type SymbolsDB struct {
@@ -189,17 +191,21 @@ func NewSymbolsDB(dbDirPath string) *SymbolsDB {
 	return db
 }
 
-func (db *SymbolsDB) FlushDB() error {
+func (db *SymbolsDB) FlushDB(saveFrom time.Time) error {
 	for _, cache := range db.tuDBs {
-		if cache.tudb != nil {
-			// TODO fix: this will write even if the db in memory
-			// is clean
-			err := cache.tudb.SaveTUSymbolsDB(db.getDBFileName(cache.path))
-			if err != nil {
-				return err
-			}
-			cache.tudb = nil
+		if cache.tudb == nil {
+			continue
 		}
+
+		if cache.accTime.After(saveFrom) {
+			continue
+		}
+
+		err := cache.tudb.SaveTUSymbolsDB(db.getDBFileName(cache.path))
+		if err != nil {
+			return err
+		}
+		cache.tudb = nil
 	}
 
 	return nil
@@ -264,6 +270,7 @@ func (db *SymbolsDB) removeFileFromHeader(headerSha1, fileSha1 [sha1.Size]byte) 
 	}
 
 	delete(tudb.Includers, fileSha1)
+	db.tuDBs[headerSha1].accTime = time.Now()
 
 	if len(tudb.Includers) == 0 {
 		delete(db.tuDBs, headerSha1)
@@ -349,11 +356,12 @@ func (db *SymbolsDB) InsertTUDB(tudb *TUSymbolsDB) error {
 				return err
 			}
 
-			db.tuDBs[headerSha1] = &tuSymbolsDBCache{
+			hcache = &tuSymbolsDBCache{
 				tudb:  htudb,
 				mtime: htudb.Mtime,
 				path:  htudb.File,
 			}
+			db.tuDBs[headerSha1] = hcache
 		} else {
 			htudb, err = db.GetTUSymbolsDB(headerSha1)
 			if err != nil {
@@ -362,6 +370,7 @@ func (db *SymbolsDB) InsertTUDB(tudb *TUSymbolsDB) error {
 		}
 
 		htudb.Includers[fileSha1] = true
+		hcache.accTime = time.Now()
 	}
 
 	err = os.Rename(tudb.tmpFile, db.getDBFileName(tudb.File))

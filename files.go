@@ -228,7 +228,7 @@ func handleFiles() {
 			db.RemoveFileReferences(file)
 		// flush frequently to disk
 		case <-flush:
-			db.FlushDB()
+			db.FlushDB(time.Now().Add(-time.Duration(flushTime) * time.Second))
 		}
 	}
 }
@@ -301,5 +301,5 @@ func CloseFilesHandler() {
 
 	wg.Wait()
 
-	db.FlushDB()
+	db.FlushDB(time.Now())
 }
