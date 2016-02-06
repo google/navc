@@ -28,6 +28,7 @@ import (
 	"net/rpc/jsonrpc"
 	"os"
 	"os/signal"
+	"runtime"
 	"sync"
 )
 
@@ -38,12 +39,12 @@ func main() {
 
 	// number of parallel indexing threads
 	var nIndexingThreads int
-	flag.IntVar(&nIndexingThreads, "numThreads", 1,
-		"Number of indexing threads (don't use)")
+	flag.IntVar(&nIndexingThreads, "numThreads", runtime.NumCPU(),
+		"Number of indexing threads")
 
 	// reset DB
-	var resetDb bool
-	flag.BoolVar(&resetDb, "resetDb", false,
+	var resetDB bool
+	flag.BoolVar(&resetDB, "resetDB", false,
 		"Reset symbols DB and start over")
 
 	flag.Parse()
@@ -79,7 +80,7 @@ func main() {
 	defer wg.Wait()
 
 	// if we need to reset the database, erase the old one
-	if resetDb {
+	if resetDB {
 		os.RemoveAll(dbDir)
 	}
 
