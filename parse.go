@@ -201,6 +201,7 @@ func (pa *Parser) Parse(file string) *TUSymbolsDB {
 	if err != nil {
 		log.Panic("unable to get new tudb", file, err)
 	}
+	defer db.TempSaveDB()
 
 	visitNode := func(cursor, parent clang.Cursor) clang.ChildVisitResult {
 		if cursor.IsNull() {

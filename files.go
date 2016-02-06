@@ -51,7 +51,7 @@ var db *SymbolsDB
 func traversePath(path string, visitDir func(string), visitC func(string), visitRest func(string)) {
 	filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			log.Println("error opening ", path, " igoring")
+			log.Println("error opening", path, "igoring", err)
 			return filepath.SkipDir
 		}
 

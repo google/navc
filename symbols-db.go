@@ -20,6 +20,7 @@ import (
 	"crypto/sha1"
 	"encoding/gob"
 	"encoding/hex"
+	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
@@ -120,6 +121,7 @@ type TUSymbolsDB struct {
 
 	// used only while parsing
 	headersTUDB []string
+	tmpFile     string
 
 	// .h lists
 	Includers map[[sha1.Size]byte]bool
@@ -162,15 +164,16 @@ func NewSymbolsDB(dbDirPath string) *SymbolsDB {
 	// cache index
 	filepath.Walk(dbDirPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			log.Println("error opening ", path, " ignoring")
+			log.Println("error opening", path, "ignoring", err)
 			return filepath.SkipDir
 		}
 
+		log.Println(path)
 		if path != dbDirPath && info.IsDir() {
 			return filepath.SkipDir
 		}
 
-		tudb, ferr := db.LoadTUSymbolsDB(path)
+		tudb, ferr := LoadTUSymbolsDB(path)
 		if ferr != nil {
 			return nil
 		}
@@ -192,7 +195,7 @@ func (db *SymbolsDB) FlushDB() error {
 		if cache.tudb != nil {
 			// TODO fix: this will write even if the db in memory
 			// is clean
-			err := db.SaveTUSymbolsDB(cache.tudb)
+			err := cache.tudb.SaveTUSymbolsDB(db.getDBFileName(cache.path))
 			if err != nil {
 				return err
 			}
@@ -211,50 +214,13 @@ func (fac *SymbolsDB) getDBFileName(file string) string {
 	return fac.getDBFileNameFromSha1(GetStringEncode(file))
 }
 
-func (db *SymbolsDB) LoadTUSymbolsDB(dbPath string) (*TUSymbolsDB, error) {
-	var tudb TUSymbolsDB
-
-	dbFile, err := os.Open(dbPath)
-	if err != nil {
-		return nil, err
-	}
-	defer dbFile.Close()
-
-	dec := gob.NewDecoder(dbFile)
-
-	err = dec.Decode(&tudb)
-	if err != nil {
-		return nil, err
-	}
-
-	return &tudb, nil
-}
-
 func (db *SymbolsDB) LoadTUSymbolsDBFromSha1(file [sha1.Size]byte) (*TUSymbolsDB, error) {
-	tudb, err := db.LoadTUSymbolsDB(db.getDBFileNameFromSha1(file))
+	tudb, err := LoadTUSymbolsDB(db.getDBFileNameFromSha1(file))
 	if err != nil {
 		return nil, err
 	}
 
 	return tudb, nil
-}
-
-func (db *SymbolsDB) SaveTUSymbolsDB(tudb *TUSymbolsDB) error {
-	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
-	dbFile, err := os.OpenFile(db.getDBFileName(tudb.File), flags, 0644)
-	if err != nil {
-		return err
-	}
-	defer dbFile.Close()
-
-	enc := gob.NewEncoder(dbFile)
-
-	err = enc.Encode(tudb)
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func (db *SymbolsDB) UptodateFile(file string) (bool, bool, error) {
@@ -335,14 +301,14 @@ func (db *SymbolsDB) InsertDependency(fileDB *TUSymbolsDB, head string) {
 
 	fileDB.Headers = append(fileDB.Headers, headSha1)
 
-	headDB, err := db.LoadTUSymbolsDB(head)
+	headDB, err := LoadTUSymbolsDB(head)
 	if err != nil {
 		log.Panic("unable to load DB for", head, err)
 	}
 
 	headDB.Includers[fileSha1] = true
 
-	err = db.SaveTUSymbolsDB(headDB)
+	err = headDB.SaveTUSymbolsDB(db.getDBFileName(headDB.File))
 	if err != nil {
 		log.Panic("unable to write DB for", head, err)
 	}
@@ -379,11 +345,13 @@ func (db *SymbolsDB) RemoveFileDepsReferences(file string) ([]string, error) {
 }
 
 func (db *SymbolsDB) InsertTUDB(tudb *TUSymbolsDB) error {
+	var err error
 	fileSha1 := GetStringEncode(tudb.File)
 	otudb := db.tuDBs[fileSha1]
 
 	if otudb != nil {
 		if otudb.mtime.After(tudb.Mtime) {
+			os.Remove(tudb.tmpFile)
 			return nil
 		}
 
@@ -392,7 +360,6 @@ func (db *SymbolsDB) InsertTUDB(tudb *TUSymbolsDB) error {
 
 	for _, header := range tudb.headersTUDB {
 		var htudb *TUSymbolsDB
-		var err error
 		headerSha1 := GetStringEncode(header)
 
 		hcache := db.tuDBs[headerSha1]
@@ -416,13 +383,18 @@ func (db *SymbolsDB) InsertTUDB(tudb *TUSymbolsDB) error {
 
 		htudb.Includers[fileSha1] = true
 	}
-	tudb.headersTUDB = nil
 
+	err = os.Rename(tudb.tmpFile, db.getDBFileName(tudb.File))
+	if err != nil {
+		return err
+	}
 	db.tuDBs[fileSha1] = &tuSymbolsDBCache{
-		tudb:  tudb,
 		mtime: tudb.Mtime,
 		path:  tudb.File,
 	}
+
+	tudb.headersTUDB = nil
+	tudb.tmpFile = ""
 
 	return nil
 }
@@ -470,6 +442,43 @@ func NewTUSymbolsDB(file string) (*TUSymbolsDB, error) {
 	}, nil
 }
 
+func LoadTUSymbolsDB(dbPath string) (*TUSymbolsDB, error) {
+	var tudb TUSymbolsDB
+
+	dbFile, err := os.Open(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	defer dbFile.Close()
+
+	dec := gob.NewDecoder(dbFile)
+
+	err = dec.Decode(&tudb)
+	if err != nil {
+		return nil, err
+	}
+
+	return &tudb, nil
+}
+
+func (db *TUSymbolsDB) SaveTUSymbolsDB(path string) error {
+	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	dbFile, err := os.OpenFile(path, flags, 0644)
+	if err != nil {
+		return err
+	}
+	defer dbFile.Close()
+
+	enc := gob.NewEncoder(dbFile)
+
+	err = enc.Encode(db)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (db *TUSymbolsDB) insertSymbolDeclWithDef(sym, def *SymbolInfo) {
 	decl := SymbolDecl{Id: sym.id}
 	if def != nil {
@@ -502,4 +511,20 @@ func (db *TUSymbolsDB) InsertSymbolUse(sym, dec *SymbolInfo, funcCall bool) {
 func (db *TUSymbolsDB) InsertHeader(headFile string) {
 	db.Headers = append(db.Headers, GetStringEncode(headFile))
 	db.headersTUDB = append(db.headersTUDB, headFile)
+}
+
+func (db *TUSymbolsDB) TempSaveDB() error {
+	tmpFile, err := ioutil.TempFile("", "")
+	if err != nil {
+		return err
+	}
+	defer tmpFile.Close()
+
+	db.tmpFile = tmpFile.Name()
+	err = db.SaveTUSymbolsDB(db.tmpFile)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
