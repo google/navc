@@ -86,8 +86,10 @@ func queueFilesToParse(files ...string) {
 }
 
 func removeFileAndReparseDepends(file string) {
-	deps := db.RemoveFileDepsReferences(file)
-	db.RemoveFileReferences(file)
+	deps, err := db.RemoveFileDepsReferences(file)
+	if err != nil {
+		log.Panic("unable to remove deps")
+	}
 	queueFilesToParse(deps...)
 }
 

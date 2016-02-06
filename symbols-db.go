@@ -358,9 +358,24 @@ func (db *SymbolsDB) GetSetFilesInDB() map[string]bool {
 	return fileSet
 }
 
-func (db *SymbolsDB) RemoveFileDepsReferences(file string) []string {
-	// TODO: remove dependent files and return list of files removed
-	return nil
+func (db *SymbolsDB) RemoveFileDepsReferences(file string) ([]string, error) {
+	fileSha1 := GetStringEncode(file)
+	tudb, err := db.GetTUSymbolsDB(fileSha1)
+	if err != nil {
+		return nil, err
+	}
+
+	deps := []string{}
+	for depSha1, _ := range tudb.Includers {
+		depTudb := db.tuDBs[depSha1]
+		deps = append(deps, depTudb.path)
+	}
+
+	for _, dep := range deps {
+		db.RemoveFileReferences(dep)
+	}
+
+	return deps, nil
 }
 
 func (db *SymbolsDB) InsertTUDB(tudb *TUSymbolsDB) error {
@@ -400,7 +415,6 @@ func (db *SymbolsDB) InsertTUDB(tudb *TUSymbolsDB) error {
 		}
 
 		htudb.Includers[fileSha1] = true
-		tudb.Headers = append(tudb.Headers, fileSha1)
 	}
 	tudb.headersTUDB = nil
 
