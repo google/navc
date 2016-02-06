@@ -168,7 +168,6 @@ func NewSymbolsDB(dbDirPath string) *SymbolsDB {
 			return filepath.SkipDir
 		}
 
-		log.Println(path)
 		if path != dbDirPath && info.IsDir() {
 			return filepath.SkipDir
 		}
@@ -293,25 +292,6 @@ func (db *SymbolsDB) RemoveFileReferences(file string) error {
 	os.Remove(db.getDBFileName(file))
 
 	return nil
-}
-
-func (db *SymbolsDB) InsertDependency(fileDB *TUSymbolsDB, head string) {
-	fileSha1 := GetStringEncode(fileDB.File)
-	headSha1 := GetStringEncode(head)
-
-	fileDB.Headers = append(fileDB.Headers, headSha1)
-
-	headDB, err := LoadTUSymbolsDB(head)
-	if err != nil {
-		log.Panic("unable to load DB for", head, err)
-	}
-
-	headDB.Includers[fileSha1] = true
-
-	err = headDB.SaveTUSymbolsDB(db.getDBFileName(headDB.File))
-	if err != nil {
-		log.Panic("unable to write DB for", head, err)
-	}
 }
 
 func (db *SymbolsDB) GetSetFilesInDB() map[string]bool {
