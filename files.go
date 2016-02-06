@@ -16,10 +16,7 @@
 
 package main
 
-/* This file will handle all file related business. It will explore the file
- * system for new files and will watch files for changes. In particular, this
- * file is the gate to the files table in the database. Other components (Parser)
- * should rely on this file to know if a file was explored or not. */
+/* TODO(useche): text explaining what is going on */
 
 import (
 	fsnotify "gopkg.in/fsnotify.v1"
@@ -29,58 +26,27 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 )
 
 const validCString string = `^[^\.].*\.c$`
 const validHString string = `^[^\.].*\.h$`
+const flushTime int = 10
 
-var files chan string
-var wg sync.WaitGroup
-var watcher *fsnotify.Watcher
-var symbDB chan *SymbolsDB
 var sysInclDir map[string]bool = map[string]bool{
 	"/usr/include/": true,
 	"/usr/lib/":     true,
 }
 
-func uptodateFile(file string) bool {
-	db := <-symbDB
-	defer func() { symbDB <- db }()
+var parseFile chan string
+var doneFile chan *TUSymbolsDB
+var foundFile, foundHeader, removeFile chan string
+var flush <-chan time.Time
 
-	exist, uptodate, err := db.UptodateFile(file)
+var wg sync.WaitGroup
+var watcher *fsnotify.Watcher
 
-	if err != nil {
-		// if there is an error with the dependency, we are going to
-		// pretend everything is fine so the parser is not executed
-		return true
-	}
-
-	if exist && uptodate {
-		return true
-	} else {
-		db.RemoveFileReferences(file)
-		return false
-	}
-}
-
-func processFile(parser *Parser) {
-	wg.Add(1)
-	defer wg.Done()
-
-	// start exploring files
-	for {
-		file, ok := <-files
-
-		if !ok {
-			return
-		}
-
-		if !uptodateFile(file) {
-			log.Println("parsing", file)
-			parser.Parse(file)
-		}
-	}
-}
+var db *SymbolsDB
 
 func traversePath(path string, visitDir func(string), visitC func(string), visitRest func(string)) {
 	filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
@@ -111,30 +77,33 @@ func traversePath(path string, visitDir func(string), visitC func(string), visit
 	})
 }
 
-func removeFileAndReparseDepends(file string, db *SymbolsDB) {
+func queueFilesToParse(files ...string) {
+	go func() {
+		for _, f := range files {
+			parseFile <- f
+		}
+	}()
+}
+
+func removeFileAndReparseDepends(file string) {
 	deps := db.RemoveFileDepsReferences(file)
 	db.RemoveFileReferences(file)
-
-	for _, d := range deps {
-		files <- d
-	}
+	queueFilesToParse(deps...)
 }
 
 func handleFileChange(event fsnotify.Event) {
 
 	validC, _ := regexp.MatchString(validCString, event.Name)
 	validH, _ := regexp.MatchString(validHString, event.Name)
-
-	db := <-symbDB
-	defer func() { symbDB <- db }()
+	path := filepath.Clean(event.Name)
 
 	switch {
 	case validC:
 		switch {
 		case event.Op&(fsnotify.Create|fsnotify.Write) != 0:
-			files <- event.Name
+			queueFilesToParse(path)
 		case event.Op&(fsnotify.Remove|fsnotify.Rename) != 0:
-			db.RemoveFileReferences(event.Name)
+			db.RemoveFileReferences(path)
 		}
 	case validH:
 		exist, uptodate, err := db.UptodateFile(event.Name)
@@ -143,11 +112,11 @@ func handleFileChange(event fsnotify.Event) {
 			return
 		case event.Op&(fsnotify.Write) != 0:
 			if exist && !uptodate {
-				removeFileAndReparseDepends(filepath.Clean(event.Name), db)
+				removeFileAndReparseDepends(path)
 			}
 		case event.Op&(fsnotify.Remove|fsnotify.Rename) != 0:
 			if exist {
-				removeFileAndReparseDepends(filepath.Clean(event.Name), db)
+				removeFileAndReparseDepends(path)
 			}
 		}
 	}
@@ -163,7 +132,7 @@ func handleDirChange(event fsnotify.Event) {
 		}
 		visitorC := func(path string) {
 			// put file in channel
-			files <- path
+			queueFilesToParse(path)
 		}
 		visitorRest := func(path string) {
 			// nothing to do
@@ -215,39 +184,56 @@ func isSysInclDir(path string) bool {
 	return false
 }
 
-func StartFilesHandler(indexDir []string, nIndexingThreads int, parser *Parser,
-	db *SymbolsDB) {
+func parseFiles(pa *Parser) {
+	wg.Add(1)
+	defer wg.Done()
 
-	files = make(chan string, nIndexingThreads)
-	symbDB = make(chan *SymbolsDB, 1)
-	symbDB <- db
-
-	// start threads to process files
-	for i := 0; i < nIndexingThreads; i++ {
-		go processFile(parser)
+	for file := range parseFile {
+		log.Println("parsing", file)
+		doneFile <- pa.Parse(file)
 	}
+}
 
-	// start file watcher
-	watcher, _ = fsnotify.NewWatcher()
-	go func() {
-		wg.Add(1)
-		defer wg.Done()
-		for {
-			select {
-			case event, ok := <-watcher.Events:
-				if !ok {
-					return
-				}
-				handleChange(event)
-			case err, ok := <-watcher.Errors:
-				if !ok {
-					return
-				}
+func handleFiles() {
+	wg.Add(1)
+	defer wg.Done()
 
-				log.Println("watcher error: ", err)
+	for {
+		select {
+		// process parsed files
+		case tudb, ok := <-doneFile:
+			if !ok {
+				return
 			}
+			db.InsertTUDB(tudb)
+		// process changes in files
+		case event := <-watcher.Events:
+			handleChange(event)
+		case err := <-watcher.Errors:
+			log.Println("watcher error: ", err)
+		// process explored files
+		case header := <-foundHeader:
+			exist, uptodate, err := db.UptodateFile(header)
+			if err == nil && exist && !uptodate {
+				removeFileAndReparseDepends(header)
+			}
+		case file := <-foundFile:
+			exist, uptodate, err := db.UptodateFile(file)
+			if err == nil && (!exist || !uptodate) {
+				queueFilesToParse(file)
+			}
+		case file := <-removeFile:
+			db.RemoveFileReferences(file)
+		// flush frequently to disk
+		case <-flush:
+			db.FlushDB()
 		}
-	}()
+	}
+}
+
+func exploreIndexDir(indexDir []string) {
+	wg.Add(1)
+	defer wg.Done()
 
 	// explore all the paths in indexDir and process all files
 	notExplored := db.GetSetFilesInDB()
@@ -259,19 +245,14 @@ func StartFilesHandler(indexDir []string, nIndexingThreads int, parser *Parser,
 		// update set of removed files
 		delete(notExplored, path)
 		// put file in channel
-		files <- path
+		foundFile <- path
 	}
 	visitorRest := func(path string) {
 		if notExplored[path] {
 			// update set of removed files
 			delete(notExplored, path)
 
-			db := <-symbDB
-			_, uptodate, err := db.UptodateFile(path)
-			if err != nil && !uptodate {
-				removeFileAndReparseDepends(path, db)
-			}
-			symbDB <- db
+			foundHeader <- path
 		}
 	}
 	for _, path := range indexDir {
@@ -285,42 +266,38 @@ func StartFilesHandler(indexDir []string, nIndexingThreads int, parser *Parser,
 			visitorRest(path)
 		} else {
 			// if not, then delete
-			db := <-symbDB
-			db.RemoveFileReferences(path)
-			symbDB <- db
+			removeFile <- path
 		}
 	}
 }
 
-func UpdateDependency(fileDB *TUSymbolsDB, file, dep string) bool {
-	db := <-symbDB
-	defer func() { symbDB <- db }()
+func StartFilesHandler(indexDir []string, nIndexingThreads int, pdb *SymbolsDB) {
 
-	exist, uptodate, err := db.UptodateFile(dep)
+	parseFile = make(chan string)
+	doneFile = make(chan *TUSymbolsDB)
+	foundFile = make(chan string)
+	foundHeader = make(chan string)
+	removeFile = make(chan string)
+	watcher, _ = fsnotify.NewWatcher()
+	flush = time.Tick(time.Duration(flushTime) * time.Second)
+	db = pdb
 
-	if err != nil {
-		// if there is an error with the dependency, we are going to
-		// pretend everything is fine so the parser move forward
-		return true
+	// start threads to process files
+	for i := 0; i < nIndexingThreads; i++ {
+		go parseFiles(NewParser(indexDir))
 	}
 
-	if exist && !uptodate {
-		removeFileAndReparseDepends(dep, db)
-		files <- file
-		return false
-	}
-
-	db.InsertDependency(fileDB, dep)
-	return true
+	go handleFiles()
+	go exploreIndexDir(indexDir)
 }
 
 func CloseFilesHandler() {
-	close(files)
-
-	<-symbDB
-	close(symbDB)
+	close(parseFile)
+	close(doneFile)
 
 	watcher.Close()
 
 	wg.Wait()
+
+	db.FlushDB()
 }

@@ -26,8 +26,6 @@ import (
 )
 
 type Parser struct {
-	db *SymbolsDB
-
 	cas map[string][]string
 }
 
@@ -134,8 +132,8 @@ func getCompArgs(command, path string) []string {
 	return args
 }
 
-func NewParser(db *SymbolsDB, inputDirs []string) *Parser {
-	ret := &Parser{db, make(map[string][]string)}
+func NewParser(inputDirs []string) *Parser {
+	ret := &Parser{make(map[string][]string)}
 
 	// read compilation args db and fix files paths
 	for _, path := range inputDirs {
@@ -174,18 +172,18 @@ func getSymbolFromCursor(db *TUSymbolsDB, cursor *clang.Cursor) (*SymbolInfo, st
 	fName := filepath.Clean(f.Name())
 	return &SymbolInfo{
 		id: SymbolID{
-			db.Encode(cursor.Spelling()),
-			db.Encode(cursor.USR()),
+			GetStringEncode(cursor.Spelling()),
+			GetStringEncode(cursor.USR()),
 		},
 		loc: SymbolLoc{
-			db.Encode(fName),
+			GetStringEncode(fName),
 			int16(line),
 			int16(col),
 		},
 	}, fName
 }
 
-func (pa *Parser) Parse(file string) {
+func (pa *Parser) Parse(file string) *TUSymbolsDB {
 	addedDepends := map[string]bool{file: true}
 
 	// insert symbols
@@ -199,11 +197,10 @@ func (pa *Parser) Parse(file string) {
 	tu := idx.Parse(file, args, nil, clang.TU_DetailedPreprocessingRecord)
 	defer tu.Dispose()
 
-	db, err := pa.db.NewTUSymbolsDB(file)
+	db, err := NewTUSymbolsDB(file)
 	if err != nil {
 		log.Panic("unable to get new tudb", file, err)
 	}
-	defer pa.db.SaveTUSymbolsDB(db)
 
 	visitNode := func(cursor, parent clang.Cursor) clang.ChildVisitResult {
 		if cursor.IsNull() {
@@ -228,11 +225,7 @@ func (pa *Parser) Parse(file string) {
 		////////////////////////////////////
 
 		if !addedDepends[curFile] {
-			if !UpdateDependency(db, file, curFile) {
-				// The header is not uptodate. Cancel this
-				// parsing to start over with this file
-				return clang.CVR_Break
-			}
+			db.InsertHeader(curFile)
 			addedDepends[curFile] = true
 		}
 
@@ -267,4 +260,6 @@ func (pa *Parser) Parse(file string) {
 	}
 
 	tu.ToCursor().Visit(visitNode)
+
+	return db
 }

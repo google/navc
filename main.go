@@ -86,11 +86,8 @@ func main() {
 	// open databased of symbols
 	db := NewSymbolsDB(dbDir)
 
-	// create parser
-	parser := NewParser(db, indexDir)
-
 	// start files handler
-	StartFilesHandler(indexDir, nIndexingThreads, parser, db)
+	StartFilesHandler(indexDir, nIndexingThreads, db)
 	defer CloseFilesHandler()
 
 	// start serving requests
