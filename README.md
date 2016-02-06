@@ -42,8 +42,6 @@ TODO
 * Currently, to update the compile\_commands.json file in memory, the daemon
   has to be restarted. This can be fixed easily by simply watching all the
   compile\_commands.json files and update the database in memory if it changed.
-* Find a way to parse files in parallel either by concurrently writing to the
-  DB or have a map/reduce kind of format where map=parse, reduce=insert in DB.
 
 DISCLAIMER
 ==========
