@@ -23,13 +23,9 @@ package main
 import (
 	"flag"
 	"log"
-	"net"
-	"net/rpc"
-	"net/rpc/jsonrpc"
 	"os"
 	"os/signal"
 	"runtime"
-	"sync"
 )
 
 func main() {
@@ -48,9 +44,6 @@ func main() {
 		"Reset symbols DB and start over")
 
 	flag.Parse()
-
-	// socket file for communication with daemon
-	socketFile := "/tmp/navc.sock"
 
 	// list of directores with source to index
 	var indexDir []string
@@ -76,53 +69,18 @@ func main() {
 	signal.Notify(intr, os.Interrupt, os.Kill)
 	defer close(intr)
 
-	var wg sync.WaitGroup
-	defer wg.Wait()
-
 	// if we need to reset the database, erase the old one
 	if resetDB {
 		os.RemoveAll(dbDir)
 	}
 
-	// open databased of symbols
-	db := NewSymbolsDB(dbDir)
-
 	// start files handler
-	StartFilesHandler(indexDir, nIndexingThreads, db)
-	defer CloseFilesHandler()
-
-	// start serving requests
-	os.Remove(socketFile)
-	lis, err := net.Listen("unix", socketFile)
+	err := StartFilesHandler(indexDir, nIndexingThreads, dbDir)
 	if err != nil {
-		log.Println("error opening socket", err)
+		log.Println("unable to start daemon", err)
 		return
 	}
-	defer os.Remove(socketFile)
-	defer lis.Close()
-
-	handler := rpc.NewServer()
-	handler.Register(&RequestHandler{db})
-	go func() {
-		wg.Add(1)
-		defer wg.Done()
-
-		for {
-			conn, err := lis.Accept()
-			if err != nil {
-				log.Println("accepting connection (breaking):",
-					err)
-				return
-			}
-
-			codec := jsonrpc.NewServerCodec(conn)
-			err = handler.ServeRequest(codec)
-			if err != nil {
-				log.Println("handling request (ignoring):", err)
-			}
-			codec.Close()
-		}
-	}()
+	defer CloseFilesHandler()
 
 	// wait until ctl-c is pressed
 	select {

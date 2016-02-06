@@ -21,6 +21,7 @@ package main
 import (
 	fsnotify "gopkg.in/fsnotify.v1"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -42,11 +43,13 @@ var parseFile chan string
 var doneFile chan *TUSymbolsDB
 var foundFile, foundHeader, removeFile chan string
 var flush <-chan time.Time
+var newConn chan net.Conn
 
 var wg sync.WaitGroup
 var watcher *fsnotify.Watcher
 
 var db *SymbolsDB
+var rh *RequestHandler
 
 func traversePath(path string, visitDir func(string), visitC func(string), visitRest func(string)) {
 	filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
@@ -229,6 +232,9 @@ func handleFiles() {
 		// flush frequently to disk
 		case <-flush:
 			db.FlushDB(time.Now().Add(-time.Duration(flushTime) * time.Second))
+		// handle requests
+		case conn := <-newConn:
+			rh.HandleRequest(conn)
 		}
 	}
 }
@@ -273,24 +279,32 @@ func exploreIndexDir(indexDir []string) {
 	}
 }
 
-func StartFilesHandler(indexDir []string, nIndexingThreads int, pdb *SymbolsDB) {
+func StartFilesHandler(indexDir []string, nIndexingThreads int, dbDir string) error {
+	var err error
 
 	parseFile = make(chan string)
 	doneFile = make(chan *TUSymbolsDB)
 	foundFile = make(chan string)
 	foundHeader = make(chan string)
 	removeFile = make(chan string)
-	watcher, _ = fsnotify.NewWatcher()
+	watcher, err = fsnotify.NewWatcher()
+	if err != nil {
+		return err
+	}
 	flush = time.Tick(time.Duration(flushTime) * time.Second)
-	db = pdb
+	db = NewSymbolsDB(dbDir)
+	rh = NewRequestHandler(db)
 
 	// start threads to process files
 	for i := 0; i < nIndexingThreads; i++ {
 		go parseFiles(NewParser(indexDir))
 	}
 
+	go ListenRequests(newConn)
 	go handleFiles()
 	go exploreIndexDir(indexDir)
+
+	return nil
 }
 
 func CloseFilesHandler() {
