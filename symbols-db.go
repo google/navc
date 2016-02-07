@@ -109,6 +109,12 @@ type SymbolInfo struct {
 	loc SymbolLoc
 }
 
+type SymbolLocReq struct {
+	File string
+	Line int
+	Col  int
+}
+
 type TUSymbolsDB struct {
 	File  string
 	Mtime time.Time
@@ -391,19 +397,47 @@ func (db *SymbolsDB) InsertTUDB(tudb *TUSymbolsDB) error {
 ///// SymbolsDB query methods
 // TODO: implement
 
-func (db *SymbolsDB) GetSymbolDecl(use *SymbolLoc) *SymbolLoc {
+func getSymbolLoc(sym *SymbolLocReq) *SymbolLoc {
+	fileSha1 := GetStringEncode(filepath.Clean(sym.File))
+	return &SymbolLoc{
+		fileSha1,
+		int16(sym.Line),
+		int16(sym.Col),
+	}
+}
+
+func (db *SymbolsDB) getSymbolLocReq(sym SymbolLoc) *SymbolLocReq {
+	cache := db.tuDBs[sym.File]
+	if cache == nil {
+		return nil
+	}
+
+	return &SymbolLocReq{
+		cache.path,
+		int(sym.Line),
+		int(sym.Col),
+	}
+}
+
+func (db *SymbolsDB) GetSymbolDecl(useReq *SymbolLocReq) *SymbolLocReq {
+	use := getSymbolLoc(useReq)
+	tudb, err := db.GetTUSymbolsDB(use.File)
+	if err != nil {
+		return nil
+	}
+
+	return db.getSymbolLocReq(tudb.Uses[*use].Decl)
+}
+
+func (db *SymbolsDB) GetSymbolUses(useReq *SymbolLocReq) []*SymbolLocReq {
 	return nil
 }
 
-func (db *SymbolsDB) GetSymbolUses(use *SymbolLoc) []*SymbolLoc {
+func (db *SymbolsDB) GetSymbolDef(use *SymbolLocReq) *SymbolLocReq {
 	return nil
 }
 
-func (db *SymbolsDB) GetSymbolDef(use *SymbolLoc) *SymbolLoc {
-	return nil
-}
-
-func (db *SymbolsDB) GetAllSymbolDefs(use *SymbolLoc) []*SymbolLoc {
+func (db *SymbolsDB) GetAllSymbolDefs(use *SymbolLocReq) []*SymbolLocReq {
 	// TODO: this worked nice in the old sqlite DB as we had all
 	// definitions in a single table. Now, we would have to look on all
 	// files to get the same result. We could look in the includers of the

@@ -16,7 +16,7 @@
 
 package main
 
-/* TODO(useche): text explaining what is going on */
+/* TODO(useche): text explaining what is going on here */
 
 import (
 	fsnotify "gopkg.in/fsnotify.v1"
@@ -234,7 +234,7 @@ func handleFiles() {
 			db.FlushDB(time.Now().Add(-time.Duration(flushTime) * time.Second))
 		// handle requests
 		case conn := <-newConn:
-			rh.HandleRequest(conn)
+			rh.handleRequest(conn)
 		}
 	}
 }
@@ -287,6 +287,7 @@ func StartFilesHandler(indexDir []string, nIndexingThreads int, dbDir string) er
 	foundFile = make(chan string)
 	foundHeader = make(chan string)
 	removeFile = make(chan string)
+	newConn = make(chan net.Conn)
 	watcher, err = fsnotify.NewWatcher()
 	if err != nil {
 		return err

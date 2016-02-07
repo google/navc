@@ -31,7 +31,7 @@ type RequestHandler struct {
 }
 
 // request methods
-func (rh *RequestHandler) GetSymbolDecl(use *SymbolLoc, res *SymbolLoc) error {
+func (rh *RequestHandler) GetSymbolDecl(use *SymbolLocReq, res *SymbolLocReq) error {
 	dec := rh.db.GetSymbolDecl(use)
 	if dec != nil {
 		*res = *dec
@@ -41,7 +41,7 @@ func (rh *RequestHandler) GetSymbolDecl(use *SymbolLoc, res *SymbolLoc) error {
 	}
 }
 
-func (rh *RequestHandler) GetSymbolUses(use *SymbolLoc, res *[]*SymbolLoc) error {
+func (rh *RequestHandler) GetSymbolUses(use *SymbolLocReq, res *[]*SymbolLocReq) error {
 	uses := rh.db.GetSymbolUses(use)
 	if len(uses) > 0 {
 		*res = uses
@@ -51,7 +51,7 @@ func (rh *RequestHandler) GetSymbolUses(use *SymbolLoc, res *[]*SymbolLoc) error
 	}
 }
 
-func (rh *RequestHandler) GetSymbolDef(use *SymbolLoc, res *[]*SymbolLoc) error {
+func (rh *RequestHandler) GetSymbolDef(use *SymbolLocReq, res *[]*SymbolLocReq) error {
 	def := rh.db.GetSymbolDef(use)
 	if def == nil {
 		// find all definitions with the same name
@@ -63,7 +63,7 @@ func (rh *RequestHandler) GetSymbolDef(use *SymbolLoc, res *[]*SymbolLoc) error 
 			return fmt.Errorf("Definition not found")
 		}
 	} else {
-		*res = []*SymbolLoc{def}
+		*res = []*SymbolLocReq{def}
 		return nil
 	}
 }
@@ -77,7 +77,7 @@ func NewRequestHandler(db *SymbolsDB) *RequestHandler {
 	return rh
 }
 
-func (rh *RequestHandler) HandleRequest(conn net.Conn) {
+func (rh *RequestHandler) handleRequest(conn net.Conn) {
 	codec := jsonrpc.NewServerCodec(conn)
 	defer codec.Close()
 
