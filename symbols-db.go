@@ -20,6 +20,7 @@ import (
 	"crypto/sha1"
 	"encoding/gob"
 	"encoding/hex"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"os"
@@ -257,6 +258,10 @@ func (db *SymbolsDB) UptodateFile(file string) (bool, bool, error) {
 func (db *SymbolsDB) GetTUSymbolsDB(fileSha1 [sha1.Size]byte) (*TUSymbolsDB, error) {
 	cache := db.tuDBs[fileSha1]
 
+	if cache == nil {
+		return nil, fmt.Errorf("File not in DB")
+	}
+
 	if cache.tudb != nil {
 		return cache.tudb, nil
 	}
@@ -431,7 +436,38 @@ func (db *SymbolsDB) GetSymbolUses(useReq *SymbolLocReq) []*SymbolLocReq {
 	return nil
 }
 
-func (db *SymbolsDB) GetSymbolDef(use *SymbolLocReq) *SymbolLocReq {
+func (db *SymbolsDB) GetSymbolDef(useReq *SymbolLocReq) *SymbolLocReq {
+	loc := getSymbolLoc(useReq)
+	tudb, err := db.GetTUSymbolsDB(loc.File)
+	if err != nil {
+		return nil
+	}
+
+	// checking if we got a definition
+	_, exist := tudb.Defs[*loc]
+	if exist {
+		return useReq
+	}
+
+	// checking if we got a declaration
+	decl, exist := tudb.Decls[*loc]
+	if exist {
+		if decl.DefAvail {
+			return db.getSymbolLocReq(decl.Def)
+		}
+
+		return nil
+	}
+
+	// if we got a regular use
+	use, exist := tudb.Uses[*loc]
+	if exist {
+		decl = tudb.Decls[use.Decl]
+		if decl.DefAvail {
+			return db.getSymbolLocReq(decl.Def)
+		}
+	}
+
 	return nil
 }
 
