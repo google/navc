@@ -449,20 +449,48 @@ func (db *SymbolsDB) GetSymbolDef(useReq *SymbolLocReq) *SymbolLocReq {
 		return useReq
 	}
 
+	var declLoc SymbolLoc // declaration location
+
 	// checking if we got a declaration
 	decl, exist := tudb.Decls[*loc]
 	if exist {
 		if decl.DefAvail {
 			return db.getSymbolLocReq(decl.Def)
 		}
-
-		return nil
+		declLoc = *loc
 	}
 
 	// if we got a regular use
 	use, exist := tudb.Uses[*loc]
 	if exist {
 		decl = tudb.Decls[use.Decl]
+		if decl.DefAvail {
+			return db.getSymbolLocReq(decl.Def)
+		}
+		declLoc = use.Decl
+	}
+
+	// at this point I have a valid decl without def
+
+	// if the declaration is in the same file, we should not look further
+	if declLoc.File == loc.File {
+		return nil
+	}
+
+	// the declaration is in a header, lets try to find the definition in
+	// another TU
+	htudb, err := db.GetTUSymbolsDB(declLoc.File)
+	if err != nil {
+		return nil
+	}
+
+	for tuSha1, _ := range htudb.Includers {
+		otudb, err := db.GetTUSymbolsDB(tuSha1)
+		if err != nil {
+			continue
+		}
+
+		decl := otudb.Decls[declLoc]
 		if decl.DefAvail {
 			return db.getSymbolLocReq(decl.Def)
 		}
