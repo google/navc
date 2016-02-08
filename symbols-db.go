@@ -142,10 +142,14 @@ type tuSymbolsDBCache struct {
 }
 
 type SymbolsDB struct {
-	dbDirPath string
-
 	tuDBs map[[sha1.Size]byte]*tuSymbolsDBCache
 }
+
+// db directory path
+var dbDirPath string
+
+// db temp directory = dbDirPath + "/tmp"
+var dbDirTmp string
 
 ///// Helper functions
 
@@ -155,19 +159,16 @@ func GetStringEncode(str string) [sha1.Size]byte {
 
 ///// Symbols DB methods
 
-func NewSymbolsDB(dbDirPath string) *SymbolsDB {
+func NewSymbolsDB(dbDirPathIn string) *SymbolsDB {
 	// create index directory if it does not exist
-	if _, err := os.Stat(dbDirPath); os.IsNotExist(err) {
-		err := os.Mkdir(dbDirPath, 0700)
-		if err != nil {
-			log.Panic("unable to create db dir ", err)
-		}
+	err := os.MkdirAll(dbDirPathIn+"/tmp", 0700)
+	if err != nil {
+		log.Panic("unable to create db dir ", err)
 	}
+	dbDirPath = dbDirPathIn
+	dbDirTmp = dbDirPath + "/tmp"
 
-	db := &SymbolsDB{
-		dbDirPath: dbDirPath,
-		tuDBs:     make(map[[sha1.Size]byte]*tuSymbolsDBCache),
-	}
+	db := &SymbolsDB{make(map[[sha1.Size]byte]*tuSymbolsDBCache)}
 
 	// cache index
 	filepath.Walk(dbDirPath, func(path string, info os.FileInfo, err error) error {
@@ -207,7 +208,7 @@ func (db *SymbolsDB) FlushDB(saveFrom time.Time) error {
 			continue
 		}
 
-		err := cache.tudb.SaveTUSymbolsDB(db.getDBFileName(cache.path))
+		err := cache.tudb.SaveTUSymbolsDB(getDBFileName(cache.path))
 		if err != nil {
 			return err
 		}
@@ -217,16 +218,16 @@ func (db *SymbolsDB) FlushDB(saveFrom time.Time) error {
 	return nil
 }
 
-func (fac *SymbolsDB) getDBFileNameFromSha1(fileSha1 [sha1.Size]byte) string {
-	return fac.dbDirPath + "/" + hex.EncodeToString(fileSha1[:])
+func getDBFileNameFromSha1(fileSha1 [sha1.Size]byte) string {
+	return dbDirPath + "/" + hex.EncodeToString(fileSha1[:])
 }
 
-func (fac *SymbolsDB) getDBFileName(file string) string {
-	return fac.getDBFileNameFromSha1(GetStringEncode(file))
+func getDBFileName(file string) string {
+	return getDBFileNameFromSha1(GetStringEncode(file))
 }
 
 func (db *SymbolsDB) LoadTUSymbolsDBFromSha1(file [sha1.Size]byte) (*TUSymbolsDB, error) {
-	tudb, err := LoadTUSymbolsDB(db.getDBFileNameFromSha1(file))
+	tudb, err := LoadTUSymbolsDB(getDBFileNameFromSha1(file))
 	if err != nil {
 		return nil, err
 	}
@@ -280,7 +281,7 @@ func (db *SymbolsDB) removeFileFromHeader(headerSha1, fileSha1 [sha1.Size]byte) 
 
 	if len(tudb.Includers) == 0 {
 		delete(db.tuDBs, headerSha1)
-		os.Remove(db.getDBFileNameFromSha1(headerSha1))
+		os.Remove(getDBFileNameFromSha1(headerSha1))
 	}
 
 	return nil
@@ -302,7 +303,7 @@ func (db *SymbolsDB) RemoveFileReferences(file string) error {
 	}
 
 	delete(db.tuDBs, fileSha1)
-	os.Remove(db.getDBFileName(file))
+	os.Remove(getDBFileName(file))
 
 	return nil
 }
@@ -379,7 +380,7 @@ func (db *SymbolsDB) InsertTUDB(tudb *TUSymbolsDB) error {
 		hcache.accTime = time.Now()
 	}
 
-	err = os.Rename(tudb.tmpFile, db.getDBFileName(tudb.File))
+	err = os.Rename(tudb.tmpFile, getDBFileName(tudb.File))
 	if err != nil {
 		return err
 	}
@@ -387,9 +388,6 @@ func (db *SymbolsDB) InsertTUDB(tudb *TUSymbolsDB) error {
 		mtime: tudb.Mtime,
 		path:  tudb.File,
 	}
-
-	tudb.headersTUDB = nil
-	tudb.tmpFile = ""
 
 	return nil
 }
@@ -537,7 +535,7 @@ func (db *TUSymbolsDB) InsertHeader(headFile string) {
 }
 
 func (db *TUSymbolsDB) TempSaveDB() error {
-	tmpFile, err := ioutil.TempFile("", "")
+	tmpFile, err := ioutil.TempFile(dbDirTmp, "")
 	if err != nil {
 		return err
 	}
