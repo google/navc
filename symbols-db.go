@@ -432,8 +432,72 @@ func (db *SymbolsDB) GetSymbolDecl(useReq *SymbolLocReq) *SymbolLocReq {
 	return db.getSymbolLocReq(tudb.Uses[*use].Decl)
 }
 
+func (db *SymbolsDB) getSymbolUses(decl *SymbolLoc, tudb *TUSymbolsDB) []*SymbolLocReq {
+	uses := []*SymbolLocReq{}
+	for loc, use := range tudb.Uses {
+		if *decl == use.Decl {
+			uses = append(uses, db.getSymbolLocReq(loc))
+		}
+	}
+
+	return uses
+}
+
 func (db *SymbolsDB) GetSymbolUses(useReq *SymbolLocReq) []*SymbolLocReq {
-	return nil
+	loc := getSymbolLoc(useReq)
+	tudb, err := db.GetTUSymbolsDB(loc.File)
+	if err != nil {
+		return nil
+	}
+
+	var declLoc SymbolLoc
+
+	// checking if we got a definition
+	_, exist := tudb.Defs[*loc]
+	if exist {
+		for dloc, decl := range tudb.Decls {
+			if decl.DefAvail && decl.Def == *loc {
+				declLoc = dloc
+				break
+			}
+		}
+	}
+
+	// checking if we got a declaration
+	_, exist = tudb.Decls[*loc]
+	if exist {
+		declLoc = *loc
+	}
+
+	// checking if we got a regular use
+	symUse, exist := tudb.Uses[*loc]
+	if exist {
+		declLoc = symUse.Decl
+	}
+
+	// by now we have the declaration of the use
+
+	// if the declaration is in the same file, the uses are local
+	if declLoc.File == loc.File {
+		return db.getSymbolUses(&declLoc, tudb)
+	}
+
+	// the uses are in all the TUs including the header file with declLoc
+	var uses []*SymbolLocReq
+	htudb, err := db.GetTUSymbolsDB(declLoc.File)
+	if err != nil {
+		return nil
+	}
+	for tuSha1, _ := range htudb.Includers {
+		otudb, err := db.GetTUSymbolsDB(tuSha1)
+		if err != nil {
+			continue
+		}
+
+		uses = append(uses, db.getSymbolUses(&declLoc, otudb)...)
+	}
+
+	return uses
 }
 
 func (db *SymbolsDB) GetSymbolDef(useReq *SymbolLocReq) *SymbolLocReq {
