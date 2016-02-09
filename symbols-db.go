@@ -398,8 +398,6 @@ func (db *SymbolsDB) InsertTUDB(tudb *TUSymbolsDB) error {
 }
 
 ///// SymbolsDB query methods
-// TODO: in all these query implementation we are assuming that the request is
-// coming from a .c file. When coming from headers, the handling is different.
 // TODO: when more than one declaration is available, a symbol use points to
 // its closes declaration. This can be a problem when returning the
 // declaration. For instance, if we look for the declaration of a definition,
@@ -429,11 +427,28 @@ func (db *SymbolsDB) getSymbolLocReq(sym SymbolLoc) *SymbolLocReq {
 	}
 }
 
+func getIncluder(htudb *TUSymbolsDB) *TUSymbolsDB {
+	for fileSha1, _ := range htudb.Includers {
+		tudb, err := db.GetTUSymbolsDB(fileSha1)
+		if err != nil {
+			log.Panic("unable to find includer")
+		}
+		return tudb
+	}
+
+	return nil
+}
+
 func (db *SymbolsDB) GetSymbolDecl(useReq *SymbolLocReq) *SymbolLocReq {
 	loc := getSymbolLoc(useReq)
 	tudb, err := db.GetTUSymbolsDB(loc.File)
 	if err != nil {
 		return nil
+	}
+
+	// if header file, we should use any of its tudb
+	if len(tudb.Includers) > 0 {
+		tudb = getIncluder(tudb)
 	}
 
 	// checking if we got a definition
@@ -473,6 +488,11 @@ func (db *SymbolsDB) GetSymbolUses(useReq *SymbolLocReq) []*SymbolLocReq {
 	tudb, err := db.GetTUSymbolsDB(loc.File)
 	if err != nil {
 		return nil
+	}
+
+	// if header file, we should use any of its tudb
+	if len(tudb.Includers) > 0 {
+		tudb = getIncluder(tudb)
 	}
 
 	var declLoc SymbolLoc
@@ -530,6 +550,11 @@ func (db *SymbolsDB) GetSymbolDef(useReq *SymbolLocReq) *SymbolLocReq {
 	tudb, err := db.GetTUSymbolsDB(loc.File)
 	if err != nil {
 		return nil
+	}
+
+	// if header file, we should use any of its tudb
+	if len(tudb.Includers) > 0 {
+		tudb = getIncluder(tudb)
 	}
 
 	// checking if we got a definition
