@@ -398,7 +398,14 @@ func (db *SymbolsDB) InsertTUDB(tudb *TUSymbolsDB) error {
 }
 
 ///// SymbolsDB query methods
-// TODO: implement
+// TODO: in all these query implementation we are assuming that the request is
+// coming from a .c file. When coming from headers, the handling is different.
+// TODO: when more than one declaration is available, a symbol use points to
+// its closes declaration. This can be a problem when returning the
+// declaration. For instance, if we look for the declaration of a definition,
+// it will point to the previous declaration. But if we look for the
+// declaration of a use, it will point to the definition. We need to define
+// what to do in these cases. Return multiple declarations?
 
 func getSymbolLoc(sym *SymbolLocReq) *SymbolLoc {
 	fileSha1 := GetStringEncode(filepath.Clean(sym.File))
@@ -423,13 +430,31 @@ func (db *SymbolsDB) getSymbolLocReq(sym SymbolLoc) *SymbolLocReq {
 }
 
 func (db *SymbolsDB) GetSymbolDecl(useReq *SymbolLocReq) *SymbolLocReq {
-	use := getSymbolLoc(useReq)
-	tudb, err := db.GetTUSymbolsDB(use.File)
+	loc := getSymbolLoc(useReq)
+	tudb, err := db.GetTUSymbolsDB(loc.File)
 	if err != nil {
 		return nil
 	}
 
-	return db.getSymbolLocReq(tudb.Uses[*use].Decl)
+	// checking if we got a definition
+	_, exist := tudb.Defs[*loc]
+	if exist {
+		log.Println(tudb.Decls)
+		for dloc, decl := range tudb.Decls {
+			if decl.DefAvail && decl.Def == *loc {
+				return db.getSymbolLocReq(dloc)
+			}
+		}
+	}
+
+	// checking if we got a declaration
+	_, exist = tudb.Decls[*loc]
+	if exist {
+		return useReq
+	}
+
+	// then, we got a regular use
+	return db.getSymbolLocReq(tudb.Uses[*loc].Decl)
 }
 
 func (db *SymbolsDB) getSymbolUses(decl *SymbolLoc, tudb *TUSymbolsDB) []*SymbolLocReq {
