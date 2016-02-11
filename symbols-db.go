@@ -125,6 +125,7 @@ type tuSymbolsDBCache struct {
 	path  string
 
 	accTime time.Time
+	dirty   bool
 }
 
 type SymbolsDB struct {
@@ -194,10 +195,13 @@ func (db *SymbolsDB) FlushDB(saveFrom time.Time) error {
 			continue
 		}
 
-		err := cache.tudb.SaveTUSymbolsDB(getDBFileName(cache.path))
-		if err != nil {
-			return err
+		if cache.dirty {
+			err := cache.tudb.SaveTUSymbolsDB(getDBFileName(cache.path))
+			if err != nil {
+				return err
+			}
 		}
+		cache.dirty = false
 		cache.tudb = nil
 	}
 
@@ -247,6 +251,8 @@ func (db *SymbolsDB) GetTUSymbolsDB(fileID FileID) (*TUSymbolsDB, error) {
 		return nil, fmt.Errorf("File not in DB")
 	}
 
+	cache.accTime = time.Now()
+
 	if cache.tudb != nil {
 		return cache.tudb, nil
 	}
@@ -267,7 +273,7 @@ func (db *SymbolsDB) removeFileFromHeader(headerID, fileID FileID) error {
 	}
 
 	delete(tudb.Includers, fileID)
-	db.tuDBs[headerID].accTime = time.Now()
+	db.tuDBs[headerID].dirty = true
 
 	if len(tudb.Includers) == 0 {
 		delete(db.tuDBs, headerID)
@@ -354,9 +360,10 @@ func (db *SymbolsDB) InsertTUDB(tudb *TUSymbolsDB) error {
 			}
 
 			hcache = &tuSymbolsDBCache{
-				tudb:  htudb,
-				mtime: htudb.Mtime,
-				path:  htudb.File,
+				tudb:    htudb,
+				mtime:   htudb.Mtime,
+				path:    htudb.File,
+				accTime: time.Now(),
 			}
 			db.tuDBs[headerSha1] = hcache
 		} else {
@@ -367,7 +374,7 @@ func (db *SymbolsDB) InsertTUDB(tudb *TUSymbolsDB) error {
 		}
 
 		htudb.Includers[fileSha1] = true
-		hcache.accTime = time.Now()
+		hcache.dirty = true
 	}
 
 	err = os.Rename(tudb.tmpFile, getDBFileName(tudb.File))
