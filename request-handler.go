@@ -31,10 +31,10 @@ type RequestHandler struct {
 }
 
 // request methods
-func (rh *RequestHandler) GetSymbolDecl(use *SymbolLocReq, res *SymbolLocReq) error {
+func (rh *RequestHandler) GetSymbolDecls(use *SymbolLocReq, res *[]*SymbolLocReq) error {
 	dec := rh.db.GetSymbolDecl(use)
 	if dec != nil {
-		*res = *dec
+		*res = dec
 		return nil
 	} else {
 		return fmt.Errorf("Symbol use not found")

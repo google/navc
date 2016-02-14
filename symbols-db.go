@@ -33,81 +33,67 @@ import (
  * call this translation unit or TU (following clang's definition). Having a
  * database per translation unit will allow greater parallelism and higher
  * performance at indexing time. In the symbols directory, each database file
- * is stored with the sha1 of the file name. Each database will have the
- * following buckets:
+ * uses the sha1 of the original file name as file name. Each database will
+ * have the following fields:
  *
- * - defs (SymbolLoc -> SymbolDef): Contains all the definitions in the
- * translation unit. Each SymbolDef will have the id of the symbol defined
- * (function or structure).
+ * - SymLoc (SymbolLoc -> SymbolID): Contains all the symbols uses in the
+ * translatio unit. It maps symbol locations to symbol ID.
  *
- * - decls (SymbolLoc -> SymbolDecl): Contains all the declaration in the
- * translation unit. Each SymbolDecl will have the id, and the list of symbol
- * uses of this declaration. Also, if the definition is available, SymbolDecl
- * will point to it in the defs bucket.
+ * - SymData (SymbolID -> SymbolData): Contains the data of all the symbols
+ * indexed by symbol ID. Given any symbol location, we can find its symbol data
+ * in the translation unit. The symbol data will have the list of declarations
+ * of the symbol and the list of uses in the translation unit. If the
+ * definition of the symbol is available in this translation unit, DefAvail
+ * will be true and Def will hold the location of the definition.
  *
- * - uses (SymbolLoc -> SymbolUse): Contains all the uses in the translation
- * unit. Each SymbolUse contains the id of the symbol and a pointer to the
- * declaration in the declaration bucket. Note that the declaration may not be
- * available in codes that does not compile.
- *
- * - file: Contains the information of the file:
- *	* name: Name of the file
- *	* info: Information in fstat
- *
- * - headers: Contains a list of all the header files included in the
+ * - Headers: Contains a list of all the header files included in the
  * translation unit.
  *
- * Note 1: In the value part on the buckets it is not necessary to store the
+ * - Includers: In case the translation unit represent a header file, this list
+ * will have all the translation units including this file. This is the only
+ * information necessary for header files. Header files is where two
+ * translation units meet. For instance, one function declared in a.h and used
+ * by a.c can be defined in b.c. The meeting point of a.c and b.c is their
+ * included header file a.h. Keeping this information is important to find all
+ * the uses of a symbol or function definitions.
+ *
+ * - Misc: Contains the information of the file:
+ *	* File: Name of the file.
+ *	* Mtime: Last modification timestamp.
+ *
+ * Note 1: In the value part on the maps it is not necessary to store the
  * location as it is already in the key.
  * Note 2: SymbolsDB represents the whole index DB, while TUSymbolsDB
  * represents a single file DB.
- *
- * Header files is where two translation units meet. For instance, one function
- * declared in a.h and used by a.c can be defined in b.c. The meeting point of
- * a.c and b.c is their included header file a.h. Keeping this information is
- * important to find all the uses of a symbol or function definitions. Header
- * file database will have the files that include it in the bucket called
- * "includers."
- *
- * Note 3: Header file databases does not have "defs", "decls", or "uses"
- * buckets.
- *
- * Note 4: Currently, to remove all references of a file, we only wipe the
- * content but do not remove the file itself. This is because we don't know if
- * another transaction is in progress. We will remove this files in the next
- * daemon initialization.
+ * Note 3: Header file databases does not have "SymLoc", "SymData", or
+ * "Headers".
  */
 
+type SymbolID [sha1.Size]byte
+type FileID [sha1.Size]byte
+
 type SymbolLoc struct {
-	File [sha1.Size]byte
+	File FileID
 	Line int16
 	Col  int16
 }
 
-type SymbolID struct {
-	Name  [sha1.Size]byte
-	Unisr [sha1.Size]byte
-}
-
 type SymbolUse struct {
-	Id       SymbolID
-	Decl     SymbolLoc
+	Loc      SymbolLoc
 	FuncCall bool
 }
 
-type SymbolDecl struct {
-	Id       SymbolID
+type SymbolData struct {
+	Uses     []SymbolUse
+	Decls    []SymbolLoc
 	DefAvail bool
 	Def      SymbolLoc
 }
 
-type SymbolDef struct {
-	Id SymbolID
-}
-
 type SymbolInfo struct {
-	id  SymbolID
-	loc SymbolLoc
+	name string
+	usr  string
+	loc  SymbolLoc
 }
 
 type SymbolLocReq struct {
@@ -121,17 +107,16 @@ type TUSymbolsDB struct {
 	Mtime time.Time
 
 	// .c maps
-	Defs    map[SymbolLoc]SymbolDef
-	Decls   map[SymbolLoc]SymbolDecl
-	Uses    map[SymbolLoc]SymbolUse
-	Headers [][sha1.Size]byte
+	SymLoc  map[SymbolLoc]SymbolID
+	SymData map[SymbolID]SymbolData
+	Headers []FileID
+
+	// .h lists
+	Includers map[FileID]bool
 
 	// used only while parsing
 	headersTUDB []string
 	tmpFile     string
-
-	// .h lists
-	Includers map[[sha1.Size]byte]bool
 }
 
 type tuSymbolsDBCache struct {
@@ -143,7 +128,7 @@ type tuSymbolsDBCache struct {
 }
 
 type SymbolsDB struct {
-	tuDBs map[[sha1.Size]byte]*tuSymbolsDBCache
+	tuDBs map[FileID]*tuSymbolsDBCache
 }
 
 // db directory path
@@ -169,7 +154,7 @@ func NewSymbolsDB(dbDirPathIn string) *SymbolsDB {
 	dbDirPath = dbDirPathIn
 	dbDirTmp = dbDirPath + "/tmp"
 
-	db := &SymbolsDB{make(map[[sha1.Size]byte]*tuSymbolsDBCache)}
+	db := &SymbolsDB{make(map[FileID]*tuSymbolsDBCache)}
 
 	// cache index
 	filepath.Walk(dbDirPath, func(path string, info os.FileInfo, err error) error {
@@ -219,15 +204,15 @@ func (db *SymbolsDB) FlushDB(saveFrom time.Time) error {
 	return nil
 }
 
-func getDBFileNameFromSha1(fileSha1 [sha1.Size]byte) string {
-	return dbDirPath + "/" + hex.EncodeToString(fileSha1[:])
+func getDBFileNameFromSha1(fileID FileID) string {
+	return dbDirPath + "/" + hex.EncodeToString(fileID[:])
 }
 
 func getDBFileName(file string) string {
 	return getDBFileNameFromSha1(GetStringEncode(file))
 }
 
-func (db *SymbolsDB) LoadTUSymbolsDBFromSha1(file [sha1.Size]byte) (*TUSymbolsDB, error) {
+func (db *SymbolsDB) LoadTUSymbolsDBFromSha1(file FileID) (*TUSymbolsDB, error) {
 	tudb, err := LoadTUSymbolsDB(getDBFileNameFromSha1(file))
 	if err != nil {
 		return nil, err
@@ -255,8 +240,8 @@ func (db *SymbolsDB) UptodateFile(file string) (bool, bool, error) {
 	return true, true, nil
 }
 
-func (db *SymbolsDB) GetTUSymbolsDB(fileSha1 [sha1.Size]byte) (*TUSymbolsDB, error) {
-	cache := db.tuDBs[fileSha1]
+func (db *SymbolsDB) GetTUSymbolsDB(fileID FileID) (*TUSymbolsDB, error) {
+	cache := db.tuDBs[fileID]
 
 	if cache == nil {
 		return nil, fmt.Errorf("File not in DB")
@@ -267,7 +252,7 @@ func (db *SymbolsDB) GetTUSymbolsDB(fileSha1 [sha1.Size]byte) (*TUSymbolsDB, err
 	}
 
 	var err error
-	cache.tudb, err = db.LoadTUSymbolsDBFromSha1(fileSha1)
+	cache.tudb, err = db.LoadTUSymbolsDBFromSha1(fileID)
 	if err != nil {
 		return nil, err
 	}
@@ -275,18 +260,18 @@ func (db *SymbolsDB) GetTUSymbolsDB(fileSha1 [sha1.Size]byte) (*TUSymbolsDB, err
 	return cache.tudb, nil
 }
 
-func (db *SymbolsDB) removeFileFromHeader(headerSha1, fileSha1 [sha1.Size]byte) error {
-	tudb, err := db.GetTUSymbolsDB(headerSha1)
+func (db *SymbolsDB) removeFileFromHeader(headerID, fileID FileID) error {
+	tudb, err := db.GetTUSymbolsDB(fileID)
 	if err != nil {
 		return err
 	}
 
-	delete(tudb.Includers, fileSha1)
-	db.tuDBs[headerSha1].accTime = time.Now()
+	delete(tudb.Includers, fileID)
+	db.tuDBs[headerID].accTime = time.Now()
 
 	if len(tudb.Includers) == 0 {
-		delete(db.tuDBs, headerSha1)
-		os.Remove(getDBFileNameFromSha1(headerSha1))
+		delete(db.tuDBs, headerID)
+		os.Remove(getDBFileNameFromSha1(headerID))
 	}
 
 	return nil
@@ -398,12 +383,6 @@ func (db *SymbolsDB) InsertTUDB(tudb *TUSymbolsDB) error {
 }
 
 ///// SymbolsDB query methods
-// TODO: when more than one declaration is available, a symbol use points to
-// its closes declaration. This can be a problem when returning the
-// declaration. For instance, if we look for the declaration of a definition,
-// it will point to the previous declaration. But if we look for the
-// declaration of a use, it will point to the definition. We need to define
-// what to do in these cases. Return multiple declarations?
 
 func getSymbolLoc(sym *SymbolLocReq) *SymbolLoc {
 	fileSha1 := GetStringEncode(filepath.Clean(sym.File))
@@ -414,17 +393,27 @@ func getSymbolLoc(sym *SymbolLocReq) *SymbolLoc {
 	}
 }
 
-func (db *SymbolsDB) getSymbolLocReq(sym SymbolLoc) *SymbolLocReq {
-	cache := db.tuDBs[sym.File]
-	if cache == nil {
+func (db *SymbolsDB) getSymbolLocReq(syms []SymbolLoc) []*SymbolLocReq {
+	res := []*SymbolLocReq{}
+
+	for _, sym := range syms {
+		cache := db.tuDBs[sym.File]
+		if cache == nil {
+			continue
+		}
+
+		res = append(res, &SymbolLocReq{
+			cache.path,
+			int(sym.Line),
+			int(sym.Col),
+		})
+	}
+
+	if len(res) == 0 {
 		return nil
 	}
 
-	return &SymbolLocReq{
-		cache.path,
-		int(sym.Line),
-		int(sym.Col),
-	}
+	return res
 }
 
 func getIncluder(htudb *TUSymbolsDB) *TUSymbolsDB {
@@ -439,7 +428,7 @@ func getIncluder(htudb *TUSymbolsDB) *TUSymbolsDB {
 	return nil
 }
 
-func (db *SymbolsDB) GetSymbolDecl(useReq *SymbolLocReq) *SymbolLocReq {
+func (db *SymbolsDB) GetSymbolDecl(useReq *SymbolLocReq) []*SymbolLocReq {
 	loc := getSymbolLoc(useReq)
 	tudb, err := db.GetTUSymbolsDB(loc.File)
 	if err != nil {
@@ -451,36 +440,14 @@ func (db *SymbolsDB) GetSymbolDecl(useReq *SymbolLocReq) *SymbolLocReq {
 		tudb = getIncluder(tudb)
 	}
 
-	// checking if we got a definition
-	_, exist := tudb.Defs[*loc]
-	if exist {
-		log.Println(tudb.Decls)
-		for dloc, decl := range tudb.Decls {
-			if decl.DefAvail && decl.Def == *loc {
-				return db.getSymbolLocReq(dloc)
-			}
-		}
+	// checking if we have the location in DB
+	id, exist := tudb.SymLoc[*loc]
+	if !exist {
+		return nil
 	}
 
-	// checking if we got a declaration
-	_, exist = tudb.Decls[*loc]
-	if exist {
-		return useReq
-	}
-
-	// then, we got a regular use
-	return db.getSymbolLocReq(tudb.Uses[*loc].Decl)
-}
-
-func (db *SymbolsDB) getSymbolUses(decl *SymbolLoc, tudb *TUSymbolsDB) []*SymbolLocReq {
-	uses := []*SymbolLocReq{}
-	for loc, use := range tudb.Uses {
-		if *decl == use.Decl {
-			uses = append(uses, db.getSymbolLocReq(loc))
-		}
-	}
-
-	return uses
+	data := tudb.SymData[id]
+	return db.getSymbolLocReq(data.Decls)
 }
 
 func (db *SymbolsDB) GetSymbolUses(useReq *SymbolLocReq) []*SymbolLocReq {
@@ -489,60 +456,61 @@ func (db *SymbolsDB) GetSymbolUses(useReq *SymbolLocReq) []*SymbolLocReq {
 	if err != nil {
 		return nil
 	}
+	fileSha1 := loc.File
 
 	// if header file, we should use any of its tudb
 	if len(tudb.Includers) > 0 {
 		tudb = getIncluder(tudb)
+		fileSha1 = GetStringEncode(tudb.File)
 	}
 
-	var declLoc SymbolLoc
-
-	// checking if we got a definition
-	_, exist := tudb.Defs[*loc]
-	if exist {
-		for dloc, decl := range tudb.Decls {
-			if decl.DefAvail && decl.Def == *loc {
-				declLoc = dloc
-				break
-			}
-		}
-	}
-
-	// checking if we got a declaration
-	_, exist = tudb.Decls[*loc]
-	if exist {
-		declLoc = *loc
-	}
-
-	// checking if we got a regular use
-	symUse, exist := tudb.Uses[*loc]
-	if exist {
-		declLoc = symUse.Decl
-	}
-
-	// by now we have the declaration of the use
-
-	// if the declaration is in the same file, the uses are local
-	if declLoc.File == loc.File {
-		return db.getSymbolUses(&declLoc, tudb)
-	}
-
-	// the uses are in all the TUs including the header file with declLoc
-	var uses []*SymbolLocReq
-	htudb, err := db.GetTUSymbolsDB(declLoc.File)
-	if err != nil {
+	// checking if we have the location in DB
+	id, exist := tudb.SymLoc[*loc]
+	if !exist {
 		return nil
 	}
-	for tuSha1, _ := range htudb.Includers {
-		otudb, err := db.GetTUSymbolsDB(tuSha1)
+
+	data := tudb.SymData[id]
+
+	// add uses in this TU
+	uses := make(map[SymbolLoc]bool)
+	for _, use := range data.Uses {
+		uses[use.Loc] = true
+	}
+	// look for uses in declarations in header files
+	for _, decl := range data.Decls {
+		if decl.File == fileSha1 {
+			continue
+		}
+
+		htudb, err := db.GetTUSymbolsDB(decl.File)
 		if err != nil {
 			continue
 		}
 
-		uses = append(uses, db.getSymbolUses(&declLoc, otudb)...)
+		for tuSha1, _ := range htudb.Includers {
+			if tuSha1 == fileSha1 {
+				continue
+			}
+
+			otudb, err := db.GetTUSymbolsDB(tuSha1)
+			if err != nil {
+				continue
+			}
+
+			odata := otudb.SymData[id]
+			for _, use := range odata.Uses {
+				uses[use.Loc] = true
+			}
+		}
 	}
 
-	return uses
+	useLocs := []SymbolLoc{}
+	for useLoc, _ := range uses {
+		useLocs = append(useLocs, useLoc)
+	}
+
+	return db.getSymbolLocReq(useLocs)
 }
 
 func (db *SymbolsDB) GetSymbolDef(useReq *SymbolLocReq) *SymbolLocReq {
@@ -551,62 +519,50 @@ func (db *SymbolsDB) GetSymbolDef(useReq *SymbolLocReq) *SymbolLocReq {
 	if err != nil {
 		return nil
 	}
+	fileSha1 := loc.File
 
 	// if header file, we should use any of its tudb
 	if len(tudb.Includers) > 0 {
 		tudb = getIncluder(tudb)
+		fileSha1 = GetStringEncode(tudb.File)
 	}
 
-	// checking if we got a definition
-	_, exist := tudb.Defs[*loc]
-	if exist {
-		return useReq
-	}
-
-	var declLoc SymbolLoc // declaration location
-
-	// checking if we got a declaration
-	decl, exist := tudb.Decls[*loc]
-	if exist {
-		if decl.DefAvail {
-			return db.getSymbolLocReq(decl.Def)
-		}
-		declLoc = *loc
-	}
-
-	// if we got a regular use
-	use, exist := tudb.Uses[*loc]
-	if exist {
-		decl = tudb.Decls[use.Decl]
-		if decl.DefAvail {
-			return db.getSymbolLocReq(decl.Def)
-		}
-		declLoc = use.Decl
-	}
-
-	// at this point I have a valid decl without def
-
-	// if the declaration is in the same file, we should not look further
-	if declLoc.File == loc.File {
+	// checking if we have the location in DB
+	id, exist := tudb.SymLoc[*loc]
+	if !exist {
 		return nil
 	}
 
-	// the declaration is in a header, lets try to find the definition in
-	// another TU
-	htudb, err := db.GetTUSymbolsDB(declLoc.File)
-	if err != nil {
-		return nil
+	data := tudb.SymData[id]
+
+	if data.DefAvail {
+		return db.getSymbolLocReq([]SymbolLoc{data.Def})[0]
 	}
 
-	for tuSha1, _ := range htudb.Includers {
-		otudb, err := db.GetTUSymbolsDB(tuSha1)
+	for _, decl := range data.Decls {
+		if decl.File == fileSha1 {
+			continue
+		}
+
+		htudb, err := db.GetTUSymbolsDB(decl.File)
 		if err != nil {
 			continue
 		}
 
-		decl := otudb.Decls[declLoc]
-		if decl.DefAvail {
-			return db.getSymbolLocReq(decl.Def)
+		for tuSha1, _ := range htudb.Includers {
+			if tuSha1 == fileSha1 {
+				continue
+			}
+
+			otudb, err := db.GetTUSymbolsDB(tuSha1)
+			if err != nil {
+				continue
+			}
+
+			odata := otudb.SymData[id]
+			if odata.DefAvail {
+				return db.getSymbolLocReq([]SymbolLoc{odata.Def})[0]
+			}
 		}
 	}
 
@@ -633,11 +589,10 @@ func NewTUSymbolsDB(file string) (*TUSymbolsDB, error) {
 		File:  file,
 		Mtime: info.ModTime(),
 
-		Defs:      make(map[SymbolLoc]SymbolDef),
-		Decls:     make(map[SymbolLoc]SymbolDecl),
-		Uses:      make(map[SymbolLoc]SymbolUse),
-		Headers:   [][sha1.Size]byte{},
-		Includers: make(map[[sha1.Size]byte]bool),
+		SymLoc:    make(map[SymbolLoc]SymbolID),
+		SymData:   make(map[SymbolID]SymbolData),
+		Headers:   []FileID{},
+		Includers: make(map[FileID]bool),
 	}, nil
 }
 
@@ -678,16 +633,30 @@ func (db *TUSymbolsDB) SaveTUSymbolsDB(path string) error {
 	return nil
 }
 
-func (db *TUSymbolsDB) insertSymbolDeclWithDef(sym, def *SymbolInfo) {
-	decl := SymbolDecl{Id: sym.id}
-	if def != nil {
-		decl.DefAvail = true
-		decl.Def = def.loc
-
-		db.Defs[def.loc] = SymbolDef{def.id}
+func (db *TUSymbolsDB) getSymbolData(id SymbolID) SymbolData {
+	data, exist := db.SymData[id]
+	if !exist {
+		data = SymbolData{
+			Uses:  []SymbolUse{},
+			Decls: []SymbolLoc{},
+		}
 	}
 
-	db.Decls[sym.loc] = decl
+	return data
+}
+
+func (db *TUSymbolsDB) insertSymbolDeclWithDef(sym, def *SymbolInfo) {
+	id := GetStringEncode(sym.usr)
+
+	data := db.getSymbolData(id)
+	data.Decls = append(data.Decls, sym.loc)
+	if def != nil {
+		data.DefAvail = true
+		data.Def = def.loc
+	}
+
+	db.SymLoc[sym.loc] = id
+	db.SymData[id] = data
 }
 
 func (db *TUSymbolsDB) InsertSymbolDecl(sym *SymbolInfo) {
@@ -699,12 +668,21 @@ func (db *TUSymbolsDB) InsertSymbolDeclWithDef(sym, def *SymbolInfo) {
 }
 
 func (db *TUSymbolsDB) InsertSymbolUse(sym, dec *SymbolInfo, funcCall bool) {
-	use := SymbolUse{Id: sym.id, FuncCall: funcCall}
-	if dec != nil {
-		use.Decl = dec.loc
+	if dec == nil {
+		log.Println("use without decl, ignoring", sym)
+		return
 	}
 
-	db.Uses[sym.loc] = use
+	id := GetStringEncode(dec.usr)
+
+	data := db.getSymbolData(id)
+	data.Uses = append(data.Uses, SymbolUse{
+		Loc:      sym.loc,
+		FuncCall: funcCall,
+	})
+
+	db.SymLoc[sym.loc] = id
+	db.SymData[id] = data
 }
 
 func (db *TUSymbolsDB) InsertHeader(headFile string) {

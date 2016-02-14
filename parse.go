@@ -171,10 +171,8 @@ func getSymbolFromCursor(db *TUSymbolsDB, cursor *clang.Cursor) (*SymbolInfo, st
 	f, line, col, _ := cursor.Location().GetFileLocation()
 	fName := filepath.Clean(f.Name())
 	return &SymbolInfo{
-		id: SymbolID{
-			GetStringEncode(cursor.Spelling()),
-			GetStringEncode(cursor.USR()),
-		},
+		name: cursor.Spelling(),
+		usr:  cursor.USR(),
 		loc: SymbolLoc{
 			GetStringEncode(fName),
 			int16(line),
