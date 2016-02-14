@@ -59,7 +59,7 @@ def get_choice_int():
 
 def conn():
 	return jsonrpc.ServerProxy(jsonrpc.JsonRpc10(),
-			jsonrpc.TransportUnixSocket(addr='/tmp/navc.sock'))
+			jsonrpc.TransportUnixSocket(addr='.navc.sock'))
 
 def get_cursor_input():
 	line, col = find_start_cur_symbol()
@@ -85,7 +85,7 @@ def move_cursor(fname, line, col):
 
 def get_file_line(fname, line):
 	# TODO: this is less than optimal, but it does the trick. A vim
-	# implementation mey be more efficient.
+	# implementation may be more efficient.
 	with open(fname, 'r') as f:
 		return f.readlines()[line - 1].strip()
 
@@ -94,16 +94,33 @@ def print_error(s):
 
 def print_warn(s):
 	vim.command(':echohl WarningMsg | echo "'+s+'" | echohl None')
+
+def get_multi_choice(options):
+	if len(options) > 1:
+		num = 1
+		for op in options:
+			line = get_file_line(op['File'], op['Line'])
+			print "(%2d) %s %d\n     %s" % \
+				(num, op['File'], op['Line'], line)
+			num += 1
+		ch = get_choice_int()
+		ch -= 1
+	else:
+		ch = 0
+
+	return ch
+
 EOF
 
 " This function will find the declaration of the symbol currently under the
 " cursor.
-function! FindCursorSymbolDecl()
+function! FindCursorSymbolDecls()
 python << EOF
 
 try:
-	ret = conn().RequestHandler.GetSymbolDecl(get_cursor_input())
-	move_cursor(ret['File'], ret['Line'], ret['Col'] - 1)
+	ret = conn().RequestHandler.GetSymbolDecls(get_cursor_input())
+	ch = get_multi_choice(ret)
+	move_cursor(ret[ch]['File'], ret[ch]['Line'], ret[ch]['Col'] - 1)
 except jsonrpc.RPCFault as e:
 	print_error(e.error_data)
 
@@ -116,13 +133,7 @@ function! FindCursorSymbolUses()
 python << EOF
 try:
 	ret = conn().RequestHandler.GetSymbolUses(get_cursor_input())
-	num = 1
-	for op in ret:
-		line = get_file_line(op['File'], op['Line'])
-		print '(%2d) %s %d\n     %s' % (num, op['File'], op['Line'], line)
-		num += 1
-	ch = get_choice_int()
-	ch -= 1
+	ch = get_multi_choice(ret)
 	move_cursor(ret[ch]['File'], ret[ch]['Line'], ret[ch]['Col'] - 1)
 except jsonrpc.RPCFault as e:
 	print_error(e.error_data)
@@ -135,17 +146,7 @@ function! FindCursorSymbolDef()
 python << EOF
 try:
 	ret = conn().RequestHandler.GetSymbolDef(get_cursor_input())
-	if len(ret) > 1:
-		num = 1
-		for op in ret:
-			line = get_file_line(op['File'], op['Line'])
-			print "(%2d) %s %d\n     %s" % \
-				(num, op['File'], op['Line'], line)
-			num += 1
-		ch = get_choice_int()
-		ch -= 1
-	else:
-		ch = 0
+	ch = get_multi_choice(ret)
 	move_cursor(ret[ch]['File'], ret[ch]['Line'], ret[ch]['Col'] - 1)
 except jsonrpc.RPCFault as e:
 	print_error(e.error_data)
@@ -162,7 +163,7 @@ if len(prev_locs) > 0:
 EOF
 endfunction
 
-nnoremap <C-z>e :call FindCursorSymbolDecl()<ENTER>
+nnoremap <C-z>e :call FindCursorSymbolDecls()<ENTER>
 nnoremap <C-z>b :call MoveCursorToPrev()<ENTER>
 nnoremap <C-z>u :call FindCursorSymbolUses()<ENTER>
 nnoremap <C-z>d :call FindCursorSymbolDef()<ENTER>
