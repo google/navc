@@ -90,16 +90,16 @@ type SymbolData struct {
 	Def      SymbolLoc
 }
 
-type SymbolInfo struct {
-	name string
-	usr  string
-	loc  SymbolLoc
-}
-
 type SymbolLocReq struct {
 	File string
 	Line int
 	Col  int
+}
+
+type SymbolInfo struct {
+	name string
+	usr  string
+	loc  SymbolLocReq
 }
 
 type TUSymbolsDB struct {
@@ -647,15 +647,16 @@ func (db *TUSymbolsDB) getSymbolData(id SymbolID) SymbolData {
 
 func (db *TUSymbolsDB) insertSymbolDeclWithDef(sym, def *SymbolInfo) {
 	id := GetStringEncode(sym.usr)
+	symLoc := getSymbolLoc(&sym.loc)
 
 	data := db.getSymbolData(id)
-	data.Decls = append(data.Decls, sym.loc)
+	data.Decls = append(data.Decls, *symLoc)
 	if def != nil {
 		data.DefAvail = true
-		data.Def = def.loc
+		data.Def = *getSymbolLoc(&def.loc)
 	}
 
-	db.SymLoc[sym.loc] = id
+	db.SymLoc[*symLoc] = id
 	db.SymData[id] = data
 }
 
@@ -674,14 +675,15 @@ func (db *TUSymbolsDB) InsertSymbolUse(sym, dec *SymbolInfo, funcCall bool) {
 	}
 
 	id := GetStringEncode(dec.usr)
+	symLoc := getSymbolLoc(&sym.loc)
 
 	data := db.getSymbolData(id)
 	data.Uses = append(data.Uses, SymbolUse{
-		Loc:      sym.loc,
+		Loc:      *symLoc,
 		FuncCall: funcCall,
 	})
 
-	db.SymLoc[sym.loc] = id
+	db.SymLoc[*symLoc] = id
 	db.SymData[id] = data
 }
 
