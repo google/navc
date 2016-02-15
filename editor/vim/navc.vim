@@ -29,9 +29,10 @@ endif
 python << EOF
 import vim
 import re
-import jsonrpc
 import os
 import sys
+sys.path.append(os.path.expanduser('~/.vim/plugin/navc/'))
+import jsonrpc
 
 fname_char = re.compile('[a-zA-Z_]')
 

@@ -7,13 +7,12 @@ can be very powerful as it can know with greater exactitude the location of the
 declaration or definition being looked up. The project is limited to C for now,
 but it can be extended to C++ as clang it is able to parse it.
 
-navc is in its early stages. There is still plenty of code to be written.
-
 (Wish) List of Query Capabilities
 =================================
 * Uses of a symbol
 * Definition of a function
-* (All) Declaration of a symbol: functions, variables, typedef, enums, defines
+* (All) Declaration of a symbol: functions, variables, structs, typedef, enums,
+  defines
 * Implementations of a function pointer (is this possible?)
 * Assignments of a variable
 
@@ -30,13 +29,20 @@ package ``libclang_dev``. Once this is installed, you need to simply run:
 
 The binary will be located in $GOPATH/bin/navc.
 
-For the vim plugin to work, you need vim with python support. You also need to
-include the jsonrpc file in the PYTHONPATH env variable. Examples can be found
-in navc.vim.
+For the vim plugin to work, you need vim with python support. I added an
+installer to make the use of the plugin easier. It assumes that your vim uses
+``~/.vim`` as config directory. You can install the plugin by running:
+
+```
+	$ cd $GOPATH/src/github.com/google/navc/editor/vim/
+	$ ./install.sh
+```
+
+To uninstall the plugin, just run ``./install.sh -u``.
 
 TODO
 ====
-* Complete vim plugin for use.
+* Add navigation for structs, typedef, enums, and defines.
 * Have better logging and not log everything. In particular, it would be nice
   to have a progress bar while indexing code at start up.
 * Currently, to update the compile\_commands.json file in memory, the daemon
