@@ -18,11 +18,12 @@ package main
 
 import (
 	"encoding/json"
-	"github.com/sbinet/go-clang"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/sbinet/go-clang"
 )
 
 type Parser struct {
@@ -66,7 +67,7 @@ func fixPaths(cas []compArgs, path string) {
 	}
 
 	// second, replace absolute path with relative path and clean
-	for i, _ := range cas {
+	for i := range cas {
 		ca := &cas[i]
 		rel, err := filepath.Rel(wd, ca.File)
 		if err != nil {
@@ -80,31 +81,29 @@ func fixCompDirArg(argDir, path string) string {
 	if filepath.IsAbs(path) {
 		if filepath.IsAbs(argDir) {
 			return argDir
-		} else {
-			abs, err := filepath.Abs(argDir)
-			if err != nil {
-				log.Panic("unable to get absolute path: ",
-					err)
-			}
-			return filepath.Clean(abs)
 		}
-	} else {
-		if filepath.IsAbs(argDir) {
-			wd, err := os.Getwd()
-			if err != nil {
-				log.Panic("unable to get working directoy: ",
-					err)
-			}
-			rel, err := filepath.Rel(wd, argDir)
-			if err != nil {
-				log.Panic("unable to get relative path: ",
-					err)
-			}
-			return filepath.Clean(rel)
-		} else {
-			return filepath.Clean(path + "/" + argDir)
+
+		abs, err := filepath.Abs(argDir)
+		if err != nil {
+			log.Panic("unable to get absolute path: ",
+				err)
 		}
+		return filepath.Clean(abs)
 	}
+	if filepath.IsAbs(argDir) {
+		wd, err := os.Getwd()
+		if err != nil {
+			log.Panic("unable to get working directoy: ",
+				err)
+		}
+		rel, err := filepath.Rel(wd, argDir)
+		if err != nil {
+			log.Panic("unable to get relative path: ",
+				err)
+		}
+		return filepath.Clean(rel)
+	}
+	return filepath.Clean(path + "/" + argDir)
 }
 
 func getCompArgs(command, path string) []string {

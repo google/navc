@@ -19,7 +19,6 @@ package main
 /* TODO(useche): text explaining what is going on here */
 
 import (
-	fsnotify "gopkg.in/fsnotify.v1"
 	"log"
 	"net"
 	"os"
@@ -28,6 +27,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	fsnotify "gopkg.in/fsnotify.v1"
 )
 
 const validCString string = `^[^\.].*\.c$`
@@ -97,7 +98,6 @@ func removeFileAndReparseDepends(file string) {
 }
 
 func handleFileChange(event fsnotify.Event) {
-
 	validC, _ := regexp.MatchString(validCString, event.Name)
 	validH, _ := regexp.MatchString(validHString, event.Name)
 	path := filepath.Clean(event.Name)
