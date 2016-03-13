@@ -181,9 +181,6 @@ func getSymbolFromCursor(db *TUSymbolsDB, cursor *clang.Cursor) *SymbolInfo {
 }
 
 func (pa *Parser) Parse(file string) *TUSymbolsDB {
-	addedDepends := map[string]bool{file: true}
-
-	// insert symbols
 	idx := clang.NewIndex(0, 0)
 	defer idx.Dispose()
 
@@ -223,11 +220,6 @@ func (pa *Parser) Parse(file string) *TUSymbolsDB {
 		}
 		////////////////////////////////////
 
-		if !addedDepends[curFile] {
-			db.InsertHeader(curFile)
-			addedDepends[curFile] = true
-		}
-
 		switch cursor.Kind() {
 		case clang.CK_FunctionDecl:
 			defCursor := cursor.DefinitionCursor()
@@ -251,6 +243,9 @@ func (pa *Parser) Parse(file string) *TUSymbolsDB {
 			decCursor := cursor.Referenced()
 			dec := getSymbolFromCursor(db, &decCursor)
 			db.InsertSymbolUse(cur, dec, false)
+		case clang.CK_InclusionDirective:
+			incFile := cursor.IncludedFile()
+			db.InsertHeader(cursor.Spelling(), incFile)
 		}
 
 		// TODO: eventually we need to continue on some cases for

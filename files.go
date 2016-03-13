@@ -89,14 +89,6 @@ func queueFilesToParse(files ...string) {
 	}()
 }
 
-func removeFileAndReparseDepends(file string) {
-	deps, err := db.RemoveFileDepsReferences(file)
-	if err != nil {
-		log.Panic("unable to remove deps")
-	}
-	queueFilesToParse(deps...)
-}
-
 func handleFileChange(event fsnotify.Event) {
 	validC, _ := regexp.MatchString(validCString, event.Name)
 	validH, _ := regexp.MatchString(validHString, event.Name)
@@ -111,18 +103,14 @@ func handleFileChange(event fsnotify.Event) {
 			db.RemoveFileReferences(path)
 		}
 	case validH:
-		exist, uptodate, err := db.UptodateFile(event.Name)
+		toParse, err := db.GetOldIncluders(event.Name)
+		// TODO: on Create, we should check if there is a placeholder
+		// for the new header
 		switch {
 		case err != nil:
-			return
-		case event.Op&(fsnotify.Write) != 0:
-			if exist && !uptodate {
-				removeFileAndReparseDepends(path)
-			}
-		case event.Op&(fsnotify.Remove|fsnotify.Rename) != 0:
-			if exist {
-				removeFileAndReparseDepends(path)
-			}
+			log.Panic(err)
+		case event.Op&(fsnotify.Write|fsnotify.Remove|fsnotify.Rename) != 0:
+			queueFilesToParse(toParse...)
 		}
 	}
 }
@@ -218,10 +206,11 @@ func handleFiles() {
 			log.Println("watcher error: ", err)
 		// process explored files
 		case header := <-foundHeader:
-			exist, uptodate, err := db.UptodateFile(header)
-			if err == nil && exist && !uptodate {
-				removeFileAndReparseDepends(header)
+			toParse, err := db.GetOldIncluders(header)
+			if err != nil {
+				log.Panic(err)
 			}
+			queueFilesToParse(toParse...)
 		case file := <-foundFile:
 			exist, uptodate, err := db.UptodateFile(file)
 			if err == nil && (!exist || !uptodate) {

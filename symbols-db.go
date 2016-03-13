@@ -26,6 +26,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/sbinet/go-clang"
 )
 
 /*
@@ -103,19 +105,19 @@ type SymbolInfo struct {
 }
 
 type TUSymbolsDB struct {
-	File  string
-	Mtime time.Time
+	File string
 
-	// .c maps
+	// .c data
+	Mtime   time.Time
 	SymLoc  map[SymbolLoc]SymbolID
 	SymData map[SymbolID]SymbolData
-	Headers []FileID
+	Headers map[FileID]time.Time
 
 	// .h lists
 	Includers map[FileID]bool
 
 	// used only while parsing
-	headersTUDB []string
+	headersTUDB map[string]bool
 	tmpFile     string
 }
 
@@ -225,6 +227,48 @@ func (db *SymbolsDB) LoadTUSymbolsDBFromSha1(file FileID) (*TUSymbolsDB, error) 
 	return tudb, nil
 }
 
+func (db *SymbolsDB) getListOfFilenames(fileSet map[FileID]bool) []string {
+	filenames := []string{}
+	for fileID := range fileSet {
+		filenames = append(filenames, db.tuDBs[fileID].path)
+	}
+
+	return filenames
+}
+
+func (db *SymbolsDB) GetOldIncluders(headPath string) ([]string, error) {
+	headID := GetStringEncode(headPath)
+
+	if db.tuDBs[headID] == nil {
+		return []string{}, nil
+	}
+
+	htudb, err := db.GetTUSymbolsDB(headID)
+	if err != nil {
+		return nil, err
+	}
+
+	info, err := os.Stat(headPath)
+	if err != nil {
+		return db.getListOfFilenames(htudb.Includers), nil
+	}
+
+	files := []string{}
+	hmtime := info.ModTime()
+	for includer := range htudb.Includers {
+		tudb, err := db.GetTUSymbolsDB(includer)
+		if err != nil {
+			return nil, err
+		}
+
+		if hmtime.After(tudb.Headers[headID]) {
+			files = append(files, tudb.File)
+		}
+	}
+
+	return files, nil
+}
+
 func (db *SymbolsDB) UptodateFile(file string) (bool, bool, error) {
 	info, err := os.Stat(file)
 	if err != nil {
@@ -291,7 +335,7 @@ func (db *SymbolsDB) RemoveFileReferences(file string) error {
 		return err
 	}
 
-	for _, h := range tudb.Headers {
+	for h := range tudb.Headers {
 		err := db.removeFileFromHeader(h, fileSha1)
 		if err != nil {
 			return err
@@ -321,11 +365,7 @@ func (db *SymbolsDB) RemoveFileDepsReferences(file string) ([]string, error) {
 		return nil, err
 	}
 
-	deps := []string{}
-	for depSha1, _ := range tudb.Includers {
-		depTudb := db.tuDBs[depSha1]
-		deps = append(deps, depTudb.path)
-	}
+	deps := db.getListOfFilenames(tudb.Includers)
 
 	for _, dep := range deps {
 		db.RemoveFileReferences(dep)
@@ -343,12 +383,23 @@ func (db *SymbolsDB) InsertTUDB(tudb *TUSymbolsDB) error {
 		if otudb.mtime.After(tudb.Mtime) {
 			os.Remove(tudb.tmpFile)
 			return nil
+		} else if otudb.mtime.Equal(tudb.Mtime) {
+			odb, err := db.GetTUSymbolsDB(fileSha1)
+			if err != nil {
+				return err
+			}
+			for headSha1, headMTime := range tudb.Headers {
+				if odb.Headers[headSha1].After(headMTime) {
+					os.Remove(tudb.tmpFile)
+					return nil
+				}
+			}
 		}
 
 		db.RemoveFileReferences(tudb.File)
 	}
 
-	for _, header := range tudb.headersTUDB {
+	for header := range tudb.headersTUDB {
 		var htudb *TUSymbolsDB
 		headerSha1 := GetStringEncode(header)
 
@@ -598,8 +649,10 @@ func NewTUSymbolsDB(file string) (*TUSymbolsDB, error) {
 
 		SymLoc:    make(map[SymbolLoc]SymbolID),
 		SymData:   make(map[SymbolID]SymbolData),
-		Headers:   []FileID{},
+		Headers:   make(map[FileID]time.Time),
 		Includers: make(map[FileID]bool),
+
+		headersTUDB: make(map[string]bool),
 	}, nil
 }
 
@@ -694,9 +747,18 @@ func (db *TUSymbolsDB) InsertSymbolUse(sym, dec *SymbolInfo, funcCall bool) {
 	db.SymData[id] = data
 }
 
-func (db *TUSymbolsDB) InsertHeader(headFile string) {
-	db.Headers = append(db.Headers, GetStringEncode(headFile))
-	db.headersTUDB = append(db.headersTUDB, headFile)
+func (db *TUSymbolsDB) InsertHeader(inclPath string, headFile clang.File) {
+	var headModTime time.Time
+	var headPath string
+	if headFile.Name() == "" {
+		headModTime = time.Time{}
+		headPath = inclPath
+	} else {
+		headModTime = headFile.ModTime()
+		headPath = headFile.Name()
+	}
+	db.Headers[GetStringEncode(headPath)] = headModTime
+	db.headersTUDB[headPath] = true
 }
 
 func (db *TUSymbolsDB) TempSaveDB() error {
