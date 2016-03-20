@@ -381,19 +381,7 @@ func (db *SymbolsDB) InsertTUDB(tudb *TUSymbolsDB) error {
 
 	if otudb != nil {
 		if otudb.mtime.After(tudb.Mtime) {
-			os.Remove(tudb.tmpFile)
-			return nil
-		} else if otudb.mtime.Equal(tudb.Mtime) {
-			odb, err := db.GetTUSymbolsDB(fileSha1)
-			if err != nil {
-				return err
-			}
-			for headSha1, headMTime := range tudb.Headers {
-				if odb.Headers[headSha1].After(headMTime) {
-					os.Remove(tudb.tmpFile)
-					return nil
-				}
-			}
+			log.Panic("Inserting older tudb", otudb.path, otudb.mtime, tudb.Mtime)
 		}
 
 		db.RemoveFileReferences(tudb.File)
@@ -405,11 +393,7 @@ func (db *SymbolsDB) InsertTUDB(tudb *TUSymbolsDB) error {
 
 		hcache := db.tuDBs[headerSha1]
 		if hcache == nil {
-			htudb, err = NewTUSymbolsDB(header)
-			if err != nil {
-				return err
-			}
-
+			htudb = NewTUSymbolsDB(header, tudb.Headers[headerSha1])
 			hcache = &tuSymbolsDBCache{
 				tudb:    htudb,
 				mtime:   htudb.Mtime,
@@ -637,15 +621,10 @@ func (db *SymbolsDB) GetAllSymbolDefs(use *SymbolLocReq) []*SymbolLocReq {
 
 ///// TU Symbol methods
 
-func NewTUSymbolsDB(file string) (*TUSymbolsDB, error) {
-	info, err := os.Stat(file)
-	if err != nil {
-		return nil, err
-	}
-
+func NewTUSymbolsDB(file string, mtime time.Time) *TUSymbolsDB {
 	return &TUSymbolsDB{
 		File:  file,
-		Mtime: info.ModTime(),
+		Mtime: mtime,
 
 		SymLoc:    make(map[SymbolLoc]SymbolID),
 		SymData:   make(map[SymbolID]SymbolData),
@@ -653,7 +632,7 @@ func NewTUSymbolsDB(file string) (*TUSymbolsDB, error) {
 		Includers: make(map[FileID]bool),
 
 		headersTUDB: make(map[string]bool),
-	}, nil
+	}
 }
 
 func LoadTUSymbolsDB(dbPath string) (*TUSymbolsDB, error) {

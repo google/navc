@@ -19,6 +19,7 @@ package main
 /* TODO(useche): text explaining what is going on here */
 
 import (
+	"container/list"
 	"log"
 	"net"
 	"os"
@@ -40,6 +41,10 @@ var sysInclDir = map[string]bool{
 	"/usr/lib/":     true,
 }
 
+var toParseMap map[string]bool
+var toParseQueue *list.List
+var inFlight map[string]bool
+var nIndexingThreads int
 var parseFile chan string
 var doneFile chan *TUSymbolsDB
 var foundFile, foundHeader, removeFile chan string
@@ -80,12 +85,39 @@ func traversePath(path string, visitDir func(string), visitC func(string), visit
 	})
 }
 
+func queueFileToParse(filePath string) {
+	if len(inFlight) < nIndexingThreads && !inFlight[filePath] {
+		inFlight[filePath] = true
+		parseFile <- filePath
+	} else if !toParseMap[filePath] {
+		toParseMap[filePath] = true
+		toParseQueue.PushBack(filePath)
+	}
+}
+
 func queueFilesToParse(files ...string) {
-	go func() {
-		for _, f := range files {
-			parseFile <- f
-		}
-	}()
+	for _, f := range files {
+		queueFileToParse(f)
+	}
+}
+
+func doneFileToParse(tudb *TUSymbolsDB) {
+	if !toParseMap[tudb.File] {
+		db.InsertTUDB(tudb)
+	}
+
+	delete(inFlight, tudb.File)
+
+	if toParseQueue.Front() == nil {
+		return
+	}
+
+	filePath := toParseQueue.Front().Value.(string)
+	toParseQueue.Remove(toParseQueue.Front())
+	delete(toParseMap, filePath)
+
+	inFlight[filePath] = true
+	parseFile <- filePath
 }
 
 func handleFileChange(event fsnotify.Event) {
@@ -175,9 +207,11 @@ func isSysInclDir(path string) bool {
 	return false
 }
 
-func parseFiles(pa *Parser) {
+func parseFiles(indexDir []string) {
 	wg.Add(1)
 	defer wg.Done()
+
+	pa := NewParser(indexDir)
 
 	for file := range parseFile {
 		log.Println("parsing", file)
@@ -185,9 +219,14 @@ func parseFiles(pa *Parser) {
 	}
 }
 
-func handleFiles() {
+func handleFiles(indexDir []string) {
 	wg.Add(1)
 	defer wg.Done()
+
+	// start threads to process files
+	for i := 0; i < nIndexingThreads; i++ {
+		go parseFiles(indexDir)
+	}
 
 	for {
 		select {
@@ -196,8 +235,8 @@ func handleFiles() {
 			if !ok {
 				return
 			}
-			db.InsertTUDB(tudb)
-		// process changes in files
+			doneFileToParse(tudb)
+			// process changes in files
 		case event := <-watcher.Events:
 			handleChange(event)
 		case err := <-watcher.Errors:
@@ -266,9 +305,13 @@ func exploreIndexDir(indexDir []string) {
 	}
 }
 
-func StartFilesHandler(indexDir []string, nIndexingThreads int, dbDir string) error {
+func StartFilesHandler(indexDir []string, inputIndexThreads int, dbDir string) error {
 	var err error
 
+	toParseMap = make(map[string]bool)
+	toParseQueue = list.New()
+	inFlight = make(map[string]bool)
+	nIndexingThreads = inputIndexThreads
 	parseFile = make(chan string)
 	doneFile = make(chan *TUSymbolsDB)
 	foundFile = make(chan string)
@@ -283,13 +326,8 @@ func StartFilesHandler(indexDir []string, nIndexingThreads int, dbDir string) er
 	db = NewSymbolsDB(dbDir)
 	rh = NewRequestHandler(db)
 
-	// start threads to process files
-	for i := 0; i < nIndexingThreads; i++ {
-		go parseFiles(NewParser(indexDir))
-	}
-
 	go ListenRequests(newConn)
-	go handleFiles()
+	go handleFiles(indexDir)
 	go exploreIndexDir(indexDir)
 
 	return nil
@@ -298,7 +336,6 @@ func StartFilesHandler(indexDir []string, nIndexingThreads int, dbDir string) er
 func CloseFilesHandler() {
 	close(parseFile)
 	close(doneFile)
-
 	watcher.Close()
 
 	wg.Wait()

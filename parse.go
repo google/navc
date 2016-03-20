@@ -191,10 +191,7 @@ func (pa *Parser) Parse(file string) *TUSymbolsDB {
 	tu := idx.Parse(file, args, nil, clang.TU_DetailedPreprocessingRecord)
 	defer tu.Dispose()
 
-	db, err := NewTUSymbolsDB(file)
-	if err != nil {
-		log.Panic("unable to get new tudb", file, err)
-	}
+	db := NewTUSymbolsDB(file, tu.File(file).ModTime())
 	defer db.TempSaveDB()
 
 	visitNode := func(cursor, parent clang.Cursor) clang.ChildVisitResult {
