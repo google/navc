@@ -35,7 +35,7 @@ const validCString string = `^[^\.].*\.c$`
 const validHString string = `^[^\.].*\.h$`
 const flushTime int = 10
 
-var sysInclDir map[string]bool = map[string]bool{
+var sysInclDir = map[string]bool{
 	"/usr/include/": true,
 	"/usr/lib/":     true,
 }
@@ -63,18 +63,17 @@ func traversePath(path string, visitDir func(string), visitC func(string), visit
 		if info.IsDir() {
 			if info.Name() != "." && info.Name()[0] == '.' {
 				return filepath.SkipDir
-			} else {
-				visitDir(path)
-				return nil
 			}
+
+			visitDir(path)
+			return nil
+		}
+		// ignore non-C files
+		validC, _ := regexp.MatchString(validCString, path)
+		if validC {
+			visitC(path)
 		} else {
-			// ignore non-C files
-			validC, _ := regexp.MatchString(validCString, path)
-			if validC {
-				visitC(path)
-			} else {
-				visitRest(path)
-			}
+			visitRest(path)
 		}
 
 		return nil
@@ -141,9 +140,8 @@ func isDirectory(path string) (bool, error) {
 	fi, err := os.Stat(path)
 	if err != nil {
 		return false, err
-	} else {
-		return fi.IsDir(), nil
 	}
+	return fi.IsDir(), nil
 }
 
 func handleChange(event fsnotify.Event) {
