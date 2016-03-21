@@ -14,10 +14,6 @@
  * limitations under the License.
  */
 
-/* TODO: We have a problem with file dependencies. What if the header is
- * removed and shows up again?
- */
-
 package main
 
 import (

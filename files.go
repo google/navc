@@ -18,6 +18,21 @@ package main
 
 /* TODO(useche): text explaining what is going on here */
 
+// NOTE: There is a potential race if a included header is removed and created
+// quickly (this could be the case for vim and its backup files). To exemplofy
+// the issue, assume a file a.c that includes a header b.h. The race goes like
+// this:
+// 1. b.h is removed and navc quickly reparse a.c but does not add it yet to the
+//    DB. This new TUDB will have b.h as a potential header, but not a real one.
+// 2. While parsing, b.h is created again and navc look for potential files
+//    including a header named b.h. However, it does not find one because in the
+//    DB, a.c still have b.h as dependency. Hence, it ignores the create event.
+// 3. The new TUDB (the one without the b.h dependency) is inserted in the DB.
+//
+// In practice I havn't seen this occurring, but it might happen. The consequence
+// is that any change to b.h will not cause navc to reparse a.c. This can be
+// easily fixed in the next navc reboot or by writing to a.c for reparsing.
+
 import (
 	"container/list"
 	"log"
@@ -120,28 +135,29 @@ func doneFileToParse(tudb *TUSymbolsDB) {
 	parseFile <- filePath
 }
 
+func parseIncluders(headerPath string) {
+	toParse, err := db.GetIncluders(headerPath)
+	if err != nil {
+		log.Panic(err)
+	}
+	queueFilesToParse(toParse...)
+}
+
 func handleFileChange(event fsnotify.Event) {
 	validC, _ := regexp.MatchString(validCString, event.Name)
 	validH, _ := regexp.MatchString(validHString, event.Name)
-	path := filepath.Clean(event.Name)
 
 	switch {
 	case validC:
 		switch {
 		case event.Op&(fsnotify.Create|fsnotify.Write) != 0:
-			queueFilesToParse(path)
+			queueFilesToParse(event.Name)
 		case event.Op&(fsnotify.Remove|fsnotify.Rename) != 0:
-			db.RemoveFileReferences(path)
+			db.RemoveFileReferences(event.Name)
 		}
 	case validH:
-		toParse, err := db.GetOldIncluders(event.Name)
-		// TODO: on Create, we should check if there is a placeholder
-		// for the new header
-		switch {
-		case err != nil:
-			log.Panic(err)
-		case event.Op&(fsnotify.Write|fsnotify.Remove|fsnotify.Rename) != 0:
-			queueFilesToParse(toParse...)
+		if event.Op&(fsnotify.Write|fsnotify.Remove|fsnotify.Rename|fsnotify.Create) != 0 {
+			parseIncluders(event.Name)
 		}
 	}
 }
@@ -185,7 +201,11 @@ func handleChange(event fsnotify.Event) {
 
 	// first, we need to check if the file is a directory or not
 	isDir, err := isDirectory(event.Name)
-	if err != nil {
+	if os.IsNotExist(err) {
+		// we either removed or renamed. If not found in DB, assuming
+		// dir
+		isDir = !db.FileExist(event.Name)
+	} else if err != nil {
 		// ignoring this event
 		return
 	}
@@ -243,18 +263,19 @@ func handleFiles(indexDir []string) {
 			log.Println("watcher error: ", err)
 		// process explored files
 		case header := <-foundHeader:
-			toParse, err := db.GetOldIncluders(header)
-			if err != nil {
-				log.Panic(err)
-			}
-			queueFilesToParse(toParse...)
+			parseIncluders(header)
 		case file := <-foundFile:
 			exist, uptodate, err := db.UptodateFile(file)
 			if err == nil && (!exist || !uptodate) {
 				queueFilesToParse(file)
 			}
 		case file := <-removeFile:
-			db.RemoveFileReferences(file)
+			validH, _ := regexp.MatchString(validHString, file)
+			if validH {
+				parseIncluders(file)
+			} else {
+				db.RemoveFileReferences(file)
+			}
 		// flush frequently to disk
 		case <-flush:
 			db.FlushDB(time.Now().Add(-time.Duration(flushTime) * time.Second))
@@ -285,9 +306,8 @@ func exploreIndexDir(indexDir []string) {
 		if notExplored[path] {
 			// update set of removed files
 			delete(notExplored, path)
-
-			foundHeader <- path
 		}
+		foundHeader <- path
 	}
 	for _, path := range indexDir {
 		traversePath(path, visitorDir, visitorC, visitorRest)

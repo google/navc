@@ -146,6 +146,11 @@ func GetStringEncode(str string) [sha1.Size]byte {
 	return sha1.Sum([]byte(str))
 }
 
+func nonExistingHeaderName(headPath string) string {
+	// adding magic to filename to not confuse it with real files
+	return "IDoNotReallyExist-" + filepath.Base(headPath)
+}
+
 ///// Symbols DB methods
 
 func NewSymbolsDB(dbDirPathIn string) *SymbolsDB {
@@ -218,6 +223,10 @@ func getDBFileName(file string) string {
 	return getDBFileNameFromSha1(GetStringEncode(file))
 }
 
+func (db *SymbolsDB) FileExist(filePath string) bool {
+	return db.tuDBs[GetStringEncode(filePath)] != nil
+}
+
 func (db *SymbolsDB) LoadTUSymbolsDBFromSha1(file FileID) (*TUSymbolsDB, error) {
 	tudb, err := LoadTUSymbolsDB(getDBFileNameFromSha1(file))
 	if err != nil {
@@ -236,11 +245,18 @@ func (db *SymbolsDB) getListOfFilenames(fileSet map[FileID]bool) []string {
 	return filenames
 }
 
-func (db *SymbolsDB) GetOldIncluders(headPath string) ([]string, error) {
+func (db *SymbolsDB) GetIncluders(headPath string) ([]string, error) {
+	realHeader := true
+	hmtime := time.Time{}
 	headID := GetStringEncode(headPath)
 
 	if db.tuDBs[headID] == nil {
-		return []string{}, nil
+		// lets try for inexistent but potential headers
+		headID = GetStringEncode(nonExistingHeaderName(headPath))
+		if db.tuDBs[headID] == nil {
+			return []string{}, nil
+		}
+		realHeader = false
 	}
 
 	htudb, err := db.GetTUSymbolsDB(headID)
@@ -248,20 +264,24 @@ func (db *SymbolsDB) GetOldIncluders(headPath string) ([]string, error) {
 		return nil, err
 	}
 
-	info, err := os.Stat(headPath)
-	if err != nil {
-		return db.getListOfFilenames(htudb.Includers), nil
+	if realHeader {
+		// if the header is a real not a potential one in the DB, check
+		// if it exits and its mtime
+		info, err := os.Stat(headPath)
+		if err != nil {
+			return db.getListOfFilenames(htudb.Includers), nil
+		}
+		hmtime = info.ModTime()
 	}
 
 	files := []string{}
-	hmtime := info.ModTime()
 	for includer := range htudb.Includers {
 		tudb, err := db.GetTUSymbolsDB(includer)
 		if err != nil {
 			return nil, err
 		}
 
-		if hmtime.After(tudb.Headers[headID]) {
+		if hmtime.IsZero() || hmtime.After(tudb.Headers[headID]) {
 			files = append(files, tudb.File)
 		}
 	}
@@ -352,6 +372,10 @@ func (db *SymbolsDB) GetSetFilesInDB() map[string]bool {
 	fileSet := map[string]bool{}
 
 	for _, cache := range db.tuDBs {
+		if cache.mtime.IsZero() {
+			// ignore false files
+			continue
+		}
 		fileSet[cache.path] = true
 	}
 
@@ -731,7 +755,7 @@ func (db *TUSymbolsDB) InsertHeader(inclPath string, headFile clang.File) {
 	var headPath string
 	if headFile.Name() == "" {
 		headModTime = time.Time{}
-		headPath = inclPath
+		headPath = nonExistingHeaderName(inclPath)
 	} else {
 		headModTime = headFile.ModTime()
 		headPath = headFile.Name()
