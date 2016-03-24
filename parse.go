@@ -162,7 +162,7 @@ func NewParser(inputDirs []string) *Parser {
 	return ret
 }
 
-func getSymbolFromCursor(db *TUSymbolsDB, cursor *clang.Cursor) *SymbolInfo {
+func getSymbolFromCursor(cursor *clang.Cursor) *SymbolInfo {
 	if cursor.IsNull() {
 		return nil
 	}
@@ -199,7 +199,7 @@ func (pa *Parser) Parse(file string) *TUSymbolsDB {
 			return clang.CVR_Continue
 		}
 
-		cur := getSymbolFromCursor(db, &cursor)
+		cur := getSymbolFromCursor(&cursor)
 		curFile := cur.loc.File
 
 		if curFile == "" || curFile == "." {
@@ -216,12 +216,11 @@ func (pa *Parser) Parse(file string) *TUSymbolsDB {
 			log.Println(curFile, ":", cur.loc.Line, cur.loc.Col)
 		}
 		////////////////////////////////////
-
 		switch cursor.Kind() {
 		case clang.CK_FunctionDecl:
 			defCursor := cursor.DefinitionCursor()
 			if !defCursor.IsNull() {
-				def := getSymbolFromCursor(db, &defCursor)
+				def := getSymbolFromCursor(&defCursor)
 				db.InsertSymbolDeclWithDef(cur, def)
 			} else {
 				db.InsertSymbolDecl(cur)
@@ -234,11 +233,11 @@ func (pa *Parser) Parse(file string) *TUSymbolsDB {
 			}
 		case clang.CK_CallExpr:
 			decCursor := cursor.Referenced()
-			dec := getSymbolFromCursor(db, &decCursor)
+			dec := getSymbolFromCursor(&decCursor)
 			db.InsertSymbolUse(cur, dec, true)
 		case clang.CK_DeclRefExpr:
 			decCursor := cursor.Referenced()
-			dec := getSymbolFromCursor(db, &decCursor)
+			dec := getSymbolFromCursor(&decCursor)
 			db.InsertSymbolUse(cur, dec, false)
 		case clang.CK_InclusionDirective:
 			incFile := cursor.IncludedFile()
