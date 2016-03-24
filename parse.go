@@ -217,7 +217,8 @@ func (pa *Parser) Parse(file string) *TUSymbolsDB {
 		}
 		////////////////////////////////////
 		switch cursor.Kind() {
-		case clang.CK_FunctionDecl:
+		case clang.CK_FunctionDecl, clang.CK_StructDecl, clang.CK_FieldDecl,
+			clang.CK_TypedefDecl, clang.CK_EnumDecl, clang.CK_EnumConstantDecl:
 			defCursor := cursor.DefinitionCursor()
 			if !defCursor.IsNull() {
 				def := getSymbolFromCursor(&defCursor)
@@ -225,6 +226,8 @@ func (pa *Parser) Parse(file string) *TUSymbolsDB {
 			} else {
 				db.InsertSymbolDecl(cur)
 			}
+		case clang.CK_MacroDefinition:
+			db.InsertSymbolDeclWithDef(cur, cur)
 		case clang.CK_VarDecl:
 			db.InsertSymbolDecl(cur)
 		case clang.CK_ParmDecl:
@@ -235,7 +238,8 @@ func (pa *Parser) Parse(file string) *TUSymbolsDB {
 			decCursor := cursor.Referenced()
 			dec := getSymbolFromCursor(&decCursor)
 			db.InsertSymbolUse(cur, dec, true)
-		case clang.CK_DeclRefExpr:
+		case clang.CK_DeclRefExpr, clang.CK_TypeRef, clang.CK_MemberRefExpr,
+			clang.CK_MacroExpansion:
 			decCursor := cursor.Referenced()
 			dec := getSymbolFromCursor(&decCursor)
 			db.InsertSymbolUse(cur, dec, false)
