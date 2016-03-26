@@ -331,7 +331,7 @@ func (db *SymbolsDB) GetTUSymbolsDB(fileID FileID) (*TUSymbolsDB, error) {
 }
 
 func (db *SymbolsDB) removeFileFromHeader(headerID, fileID FileID) error {
-	tudb, err := db.GetTUSymbolsDB(fileID)
+	tudb, err := db.GetTUSymbolsDB(headerID)
 	if err != nil {
 		return err
 	}
