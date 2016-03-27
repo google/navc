@@ -25,51 +25,53 @@ import (
 	"os"
 )
 
+// RequestHandler is the handler of all quries coming to the daemon. It is
+// exported as required by the rpc packade.
 type RequestHandler struct {
-	db      *SymbolsDB
+	db      *symbolsDB
 	handler *rpc.Server
 }
 
-// request methods
+// GetSymbolDecls gets a symbol use location and returns the list of
+// declarations for that symbol.
 func (rh *RequestHandler) GetSymbolDecls(use *SymbolLocReq, res *[]*SymbolLocReq) error {
 	dec := rh.db.GetSymbolDecl(use)
-	if dec != nil {
-		*res = dec
-		return nil
-	} else {
+	if dec == nil {
 		return fmt.Errorf("Symbol use not found")
 	}
+	*res = dec
+	return nil
 }
 
+// GetSymbolUses gets a symbol use location and returns all the uses of that
+// symbol.
 func (rh *RequestHandler) GetSymbolUses(use *SymbolLocReq, res *[]*SymbolLocReq) error {
 	uses := rh.db.GetSymbolUses(use)
-	if len(uses) > 0 {
-		*res = uses
-		return nil
-	} else {
+	if len(uses) == 0 {
 		return fmt.Errorf("Symbol use not found")
 	}
+	*res = uses
+	return nil
 }
 
+// GetSymbolDef gets a symbol use location and returns the definition location
+// of the symbol. If not available, it returns an error.
 func (rh *RequestHandler) GetSymbolDef(use *SymbolLocReq, res *[]*SymbolLocReq) error {
 	def := rh.db.GetSymbolDef(use)
 	if def == nil {
 		// find all definitions with the same name
 		defs := rh.db.GetAllSymbolDefs(use)
-		if len(defs) > 0 {
-			*res = defs
-			return nil
-		} else {
+		if len(defs) == 0 {
 			return fmt.Errorf("Definition not found")
 		}
-	} else {
-		*res = []*SymbolLocReq{def}
+		*res = defs
 		return nil
 	}
+	*res = []*SymbolLocReq{def}
+	return nil
 }
 
-// connection handling methods
-func NewRequestHandler(db *SymbolsDB) *RequestHandler {
+func newRequestHandler(db *symbolsDB) *RequestHandler {
 	rh := &RequestHandler{db, rpc.NewServer()}
 
 	rh.handler.Register(rh)
@@ -87,7 +89,7 @@ func (rh *RequestHandler) handleRequest(conn net.Conn) {
 	}
 }
 
-func ListenRequests(newConn chan<- net.Conn) {
+func listenRequests(newConn chan<- net.Conn) {
 	// socket file for communication with daemon
 	socketFile := ".navc.sock"
 

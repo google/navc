@@ -38,10 +38,10 @@ import (
  * clang's nomenclature). Having a database per translation unit will allow
  * greater parallelism and higher performance at indexing time. All these files
  * are stored in the symbols directory, .navc_dbsymbols by default, and
- * represented by the struct SymbolsDB. In the symbols directory, each database
+ * represented by the struct symbolsDB. In the symbols directory, each database
  * file uses the sha1 of the original file name as file name. The file will
  * simply have a serialized form of some of the fields in the structure
- * TUSymbolsDB. This structure has the following fields:
+ * symbolsTUDB. This structure has the following fields:
  *
  * - File: Name of the source file indexed.
  *
@@ -73,58 +73,59 @@ import (
  * FileID and SymbolID are simply a hash of the name of the file or symbol. In
  * this case, it is the sha1 hash of the names.
  *
- * SymbolsDB has a map with an entry for every TUSymbolsDB. On each entry, it
+ * symbolsDB has a map with an entry for every symbolsTUDB. On each entry, it
  * caches some information of the translation unit. Translations units are
  * inserted in the InsertTUDB function. This function will also be called to
  * replace an old translation unit of a file. Translation units will be
- * persisted to disk whenever the SymbolsDB is flushed. This is done by calling
+ * persisted to disk whenever the symbolsDB is flushed. This is done by calling
  * the FlushDB function.
  */
 
-type SymbolID [sha1.Size]byte
-type FileID [sha1.Size]byte
+type symbolID [sha1.Size]byte
+type fileID [sha1.Size]byte
 
-type SymbolLoc struct {
-	File FileID
+type symbolLoc struct {
+	File fileID
 	Line int16
 	Col  int16
 }
 
-type SymbolUse struct {
-	Loc      SymbolLoc
+type symbolUse struct {
+	Loc      symbolLoc
 	FuncCall bool
 }
 
-type SymbolData struct {
-	Uses     []SymbolUse
-	Decls    []SymbolLoc
+type symbolData struct {
+	Uses     []symbolUse
+	Decls    []symbolLoc
 	DefAvail bool
-	Def      SymbolLoc
+	Def      symbolLoc
 }
 
+// SymbolLocReq is used as input and output structure for the daemon requests.
 type SymbolLocReq struct {
 	File string
 	Line int
 	Col  int
 }
 
-type SymbolInfo struct {
+type symbolInfo struct {
 	name string
 	usr  string
 	loc  SymbolLocReq
 }
 
-type TUSymbolsDB struct {
+type symbolsTUDB struct {
 	File string
 
 	// .c data
 	Mtime   time.Time
-	SymLoc  map[SymbolLoc]SymbolID
-	SymData map[SymbolID]SymbolData
-	Headers map[FileID]time.Time
+	SymLoc  map[symbolLoc]symbolID
+	SymData map[symbolID]symbolData
+	Headers map[fileID]time.Time
 
 	// .h lists
-	Includers map[FileID]bool
+	Includers map[fileID]bool
 
 	// used only while parsing
 	headersTUDB map[string]bool
@@ -132,7 +133,7 @@ type TUSymbolsDB struct {
 }
 
 type tuSymbolsDBCache struct {
-	tudb  *TUSymbolsDB
+	tudb  *symbolsTUDB
 	mtime time.Time
 	path  string
 
@@ -140,8 +141,8 @@ type tuSymbolsDBCache struct {
 	dirty   bool
 }
 
-type SymbolsDB struct {
-	tuDBs map[FileID]*tuSymbolsDBCache
+type symbolsDB struct {
+	tuDBs map[fileID]*tuSymbolsDBCache
 }
 
 // db directory path
@@ -152,7 +153,7 @@ var dbDirTmp string
 
 ///// Helper functions
 
-func GetStringEncode(str string) [sha1.Size]byte {
+func getStringEncode(str string) [sha1.Size]byte {
 	return sha1.Sum([]byte(str))
 }
 
@@ -163,7 +164,7 @@ func nonExistingHeaderName(headPath string) string {
 
 ///// Symbols DB methods
 
-func NewSymbolsDB(dbDirPathIn string) *SymbolsDB {
+func newSymbolsDB(dbDirPathIn string) *symbolsDB {
 	// create index directory if it does not exist
 	err := os.MkdirAll(dbDirPathIn+"/tmp", 0700)
 	if err != nil {
@@ -172,7 +173,7 @@ func NewSymbolsDB(dbDirPathIn string) *SymbolsDB {
 	dbDirPath = dbDirPathIn
 	dbDirTmp = dbDirPath + "/tmp"
 
-	db := &SymbolsDB{make(map[FileID]*tuSymbolsDBCache)}
+	db := &symbolsDB{make(map[fileID]*tuSymbolsDBCache)}
 
 	// cache index
 	filepath.Walk(dbDirPath, func(path string, info os.FileInfo, err error) error {
@@ -185,12 +186,12 @@ func NewSymbolsDB(dbDirPathIn string) *SymbolsDB {
 			return filepath.SkipDir
 		}
 
-		tudb, ferr := LoadTUSymbolsDB(path)
+		tudb, ferr := loadSymbolsTUDB(path)
 		if ferr != nil {
 			return nil
 		}
 
-		db.tuDBs[GetStringEncode(tudb.File)] = &tuSymbolsDBCache{
+		db.tuDBs[getStringEncode(tudb.File)] = &tuSymbolsDBCache{
 			tudb:  tudb,
 			path:  tudb.File,
 			mtime: tudb.Mtime,
@@ -202,7 +203,7 @@ func NewSymbolsDB(dbDirPathIn string) *SymbolsDB {
 	return db
 }
 
-func (db *SymbolsDB) FlushDB(saveFrom time.Time) error {
+func (db *symbolsDB) FlushDB(saveFrom time.Time) error {
 	for _, cache := range db.tuDBs {
 		if cache.tudb == nil {
 			continue
@@ -213,7 +214,7 @@ func (db *SymbolsDB) FlushDB(saveFrom time.Time) error {
 		}
 
 		if cache.dirty {
-			err := cache.tudb.SaveTUSymbolsDB(getDBFileName(cache.path))
+			err := cache.tudb.SaveSymbolsTUDB(getDBFileName(cache.path))
 			if err != nil {
 				return err
 			}
@@ -225,20 +226,20 @@ func (db *SymbolsDB) FlushDB(saveFrom time.Time) error {
 	return nil
 }
 
-func getDBFileNameFromSha1(fileID FileID) string {
-	return dbDirPath + "/" + hex.EncodeToString(fileID[:])
+func getDBFileNameFromSha1(fid fileID) string {
+	return dbDirPath + "/" + hex.EncodeToString(fid[:])
 }
 
 func getDBFileName(file string) string {
-	return getDBFileNameFromSha1(GetStringEncode(file))
+	return getDBFileNameFromSha1(getStringEncode(file))
 }
 
-func (db *SymbolsDB) FileExist(filePath string) bool {
-	return db.tuDBs[GetStringEncode(filePath)] != nil
+func (db *symbolsDB) FileExist(filePath string) bool {
+	return db.tuDBs[getStringEncode(filePath)] != nil
 }
 
-func (db *SymbolsDB) LoadTUSymbolsDBFromSha1(file FileID) (*TUSymbolsDB, error) {
-	tudb, err := LoadTUSymbolsDB(getDBFileNameFromSha1(file))
+func (db *symbolsDB) LoadSymbolsTUDBFromSha1(file fileID) (*symbolsTUDB, error) {
+	tudb, err := loadSymbolsTUDB(getDBFileNameFromSha1(file))
 	if err != nil {
 		return nil, err
 	}
@@ -246,30 +247,30 @@ func (db *SymbolsDB) LoadTUSymbolsDBFromSha1(file FileID) (*TUSymbolsDB, error) 
 	return tudb, nil
 }
 
-func (db *SymbolsDB) getListOfFilenames(fileSet map[FileID]bool) []string {
+func (db *symbolsDB) getListOfFilenames(fileSet map[fileID]bool) []string {
 	filenames := []string{}
-	for fileID := range fileSet {
-		filenames = append(filenames, db.tuDBs[fileID].path)
+	for fid := range fileSet {
+		filenames = append(filenames, db.tuDBs[fid].path)
 	}
 
 	return filenames
 }
 
-func (db *SymbolsDB) GetIncluders(headPath string) ([]string, error) {
+func (db *symbolsDB) GetIncluders(headPath string) ([]string, error) {
 	realHeader := true
 	hmtime := time.Time{}
-	headID := GetStringEncode(headPath)
+	headID := getStringEncode(headPath)
 
 	if db.tuDBs[headID] == nil {
 		// lets try for inexistent but potential headers
-		headID = GetStringEncode(nonExistingHeaderName(headPath))
+		headID = getStringEncode(nonExistingHeaderName(headPath))
 		if db.tuDBs[headID] == nil {
 			return []string{}, nil
 		}
 		realHeader = false
 	}
 
-	htudb, err := db.GetTUSymbolsDB(headID)
+	htudb, err := db.GetSymbolsTUDB(headID)
 	if err != nil {
 		return nil, err
 	}
@@ -286,7 +287,7 @@ func (db *SymbolsDB) GetIncluders(headPath string) ([]string, error) {
 
 	files := []string{}
 	for includer := range htudb.Includers {
-		tudb, err := db.GetTUSymbolsDB(includer)
+		tudb, err := db.GetSymbolsTUDB(includer)
 		if err != nil {
 			return nil, err
 		}
@@ -299,13 +300,13 @@ func (db *SymbolsDB) GetIncluders(headPath string) ([]string, error) {
 	return files, nil
 }
 
-func (db *SymbolsDB) UptodateFile(file string) (bool, bool, error) {
+func (db *symbolsDB) UptodateFile(file string) (bool, bool, error) {
 	info, err := os.Stat(file)
 	if err != nil {
 		return false, false, err
 	}
 
-	fileSha1 := GetStringEncode(file)
+	fileSha1 := getStringEncode(file)
 	cache := db.tuDBs[fileSha1]
 	if cache == nil {
 		return false, false, nil
@@ -318,8 +319,8 @@ func (db *SymbolsDB) UptodateFile(file string) (bool, bool, error) {
 	return true, true, nil
 }
 
-func (db *SymbolsDB) GetTUSymbolsDB(fileID FileID) (*TUSymbolsDB, error) {
-	cache := db.tuDBs[fileID]
+func (db *symbolsDB) GetSymbolsTUDB(fid fileID) (*symbolsTUDB, error) {
+	cache := db.tuDBs[fid]
 
 	if cache == nil {
 		return nil, fmt.Errorf("File not in DB")
@@ -332,7 +333,7 @@ func (db *SymbolsDB) GetTUSymbolsDB(fileID FileID) (*TUSymbolsDB, error) {
 	}
 
 	var err error
-	cache.tudb, err = db.LoadTUSymbolsDBFromSha1(fileID)
+	cache.tudb, err = db.LoadSymbolsTUDBFromSha1(fid)
 	if err != nil {
 		return nil, err
 	}
@@ -340,13 +341,13 @@ func (db *SymbolsDB) GetTUSymbolsDB(fileID FileID) (*TUSymbolsDB, error) {
 	return cache.tudb, nil
 }
 
-func (db *SymbolsDB) removeFileFromHeader(headerID, fileID FileID) error {
-	tudb, err := db.GetTUSymbolsDB(headerID)
+func (db *symbolsDB) removeFileFromHeader(headerID, fid fileID) error {
+	tudb, err := db.GetSymbolsTUDB(headerID)
 	if err != nil {
 		return err
 	}
 
-	delete(tudb.Includers, fileID)
+	delete(tudb.Includers, fid)
 	db.tuDBs[headerID].dirty = true
 
 	if len(tudb.Includers) == 0 {
@@ -357,10 +358,10 @@ func (db *SymbolsDB) removeFileFromHeader(headerID, fileID FileID) error {
 	return nil
 }
 
-func (db *SymbolsDB) RemoveFileReferences(file string) error {
-	fileSha1 := GetStringEncode(file)
+func (db *symbolsDB) RemoveFileReferences(file string) error {
+	fileSha1 := getStringEncode(file)
 
-	tudb, err := db.GetTUSymbolsDB(fileSha1)
+	tudb, err := db.GetSymbolsTUDB(fileSha1)
 	if err != nil {
 		return err
 	}
@@ -378,7 +379,7 @@ func (db *SymbolsDB) RemoveFileReferences(file string) error {
 	return nil
 }
 
-func (db *SymbolsDB) GetSetFilesInDB() map[string]bool {
+func (db *symbolsDB) GetSetFilesInDB() map[string]bool {
 	fileSet := map[string]bool{}
 
 	for _, cache := range db.tuDBs {
@@ -392,9 +393,9 @@ func (db *SymbolsDB) GetSetFilesInDB() map[string]bool {
 	return fileSet
 }
 
-func (db *SymbolsDB) RemoveFileDepsReferences(file string) ([]string, error) {
-	fileSha1 := GetStringEncode(file)
-	tudb, err := db.GetTUSymbolsDB(fileSha1)
+func (db *symbolsDB) RemoveFileDepsReferences(file string) ([]string, error) {
+	fileSha1 := getStringEncode(file)
+	tudb, err := db.GetSymbolsTUDB(fileSha1)
 	if err != nil {
 		return nil, err
 	}
@@ -408,9 +409,9 @@ func (db *SymbolsDB) RemoveFileDepsReferences(file string) ([]string, error) {
 	return deps, nil
 }
 
-func (db *SymbolsDB) InsertTUDB(tudb *TUSymbolsDB) error {
+func (db *symbolsDB) InsertTUDB(tudb *symbolsTUDB) error {
 	var err error
-	fileSha1 := GetStringEncode(tudb.File)
+	fileSha1 := getStringEncode(tudb.File)
 	otudb := db.tuDBs[fileSha1]
 
 	if otudb != nil {
@@ -422,12 +423,12 @@ func (db *SymbolsDB) InsertTUDB(tudb *TUSymbolsDB) error {
 	}
 
 	for header := range tudb.headersTUDB {
-		var htudb *TUSymbolsDB
-		headerSha1 := GetStringEncode(header)
+		var htudb *symbolsTUDB
+		headerSha1 := getStringEncode(header)
 
 		hcache := db.tuDBs[headerSha1]
 		if hcache == nil {
-			htudb = NewTUSymbolsDB(header, tudb.Headers[headerSha1])
+			htudb = newSymbolsTUDB(header, tudb.Headers[headerSha1])
 			hcache = &tuSymbolsDBCache{
 				tudb:    htudb,
 				mtime:   htudb.Mtime,
@@ -436,7 +437,7 @@ func (db *SymbolsDB) InsertTUDB(tudb *TUSymbolsDB) error {
 			}
 			db.tuDBs[headerSha1] = hcache
 		} else {
-			htudb, err = db.GetTUSymbolsDB(headerSha1)
+			htudb, err = db.GetSymbolsTUDB(headerSha1)
 			if err != nil {
 				return err
 			}
@@ -458,18 +459,18 @@ func (db *SymbolsDB) InsertTUDB(tudb *TUSymbolsDB) error {
 	return nil
 }
 
-///// SymbolsDB query methods
+///// symbolsDB query methods
 
-func getSymbolLoc(sym *SymbolLocReq) *SymbolLoc {
-	fileSha1 := GetStringEncode(filepath.Clean(sym.File))
-	return &SymbolLoc{
+func getSymbolLoc(sym *SymbolLocReq) *symbolLoc {
+	fileSha1 := getStringEncode(filepath.Clean(sym.File))
+	return &symbolLoc{
 		fileSha1,
 		int16(sym.Line),
 		int16(sym.Col),
 	}
 }
 
-func (db *SymbolsDB) getSymbolLocReq(syms []SymbolLoc) []*SymbolLocReq {
+func (db *symbolsDB) getSymbolLocReq(syms []symbolLoc) []*SymbolLocReq {
 	res := []*SymbolLocReq{}
 
 	for _, sym := range syms {
@@ -492,9 +493,9 @@ func (db *SymbolsDB) getSymbolLocReq(syms []SymbolLoc) []*SymbolLocReq {
 	return res
 }
 
-func getIncluder(htudb *TUSymbolsDB) *TUSymbolsDB {
-	for fileSha1, _ := range htudb.Includers {
-		tudb, err := db.GetTUSymbolsDB(fileSha1)
+func getIncluder(htudb *symbolsTUDB) *symbolsTUDB {
+	for fileSha1 := range htudb.Includers {
+		tudb, err := db.GetSymbolsTUDB(fileSha1)
 		if err != nil {
 			log.Panic("unable to find includer")
 		}
@@ -504,9 +505,9 @@ func getIncluder(htudb *TUSymbolsDB) *TUSymbolsDB {
 	return nil
 }
 
-func (db *SymbolsDB) GetSymbolDecl(useReq *SymbolLocReq) []*SymbolLocReq {
+func (db *symbolsDB) GetSymbolDecl(useReq *SymbolLocReq) []*SymbolLocReq {
 	loc := getSymbolLoc(useReq)
-	tudb, err := db.GetTUSymbolsDB(loc.File)
+	tudb, err := db.GetSymbolsTUDB(loc.File)
 	if err != nil {
 		return nil
 	}
@@ -526,9 +527,9 @@ func (db *SymbolsDB) GetSymbolDecl(useReq *SymbolLocReq) []*SymbolLocReq {
 	return db.getSymbolLocReq(data.Decls)
 }
 
-func (db *SymbolsDB) GetSymbolUses(useReq *SymbolLocReq) []*SymbolLocReq {
+func (db *symbolsDB) GetSymbolUses(useReq *SymbolLocReq) []*SymbolLocReq {
 	loc := getSymbolLoc(useReq)
-	tudb, err := db.GetTUSymbolsDB(loc.File)
+	tudb, err := db.GetSymbolsTUDB(loc.File)
 	if err != nil {
 		return nil
 	}
@@ -537,7 +538,7 @@ func (db *SymbolsDB) GetSymbolUses(useReq *SymbolLocReq) []*SymbolLocReq {
 	// if header file, we should use any of its tudb
 	if len(tudb.Includers) > 0 {
 		tudb = getIncluder(tudb)
-		fileSha1 = GetStringEncode(tudb.File)
+		fileSha1 = getStringEncode(tudb.File)
 	}
 
 	// checking if we have the location in DB
@@ -549,7 +550,7 @@ func (db *SymbolsDB) GetSymbolUses(useReq *SymbolLocReq) []*SymbolLocReq {
 	data := tudb.SymData[id]
 
 	// add uses in this TU
-	uses := make(map[SymbolLoc]bool)
+	uses := make(map[symbolLoc]bool)
 	for _, use := range data.Uses {
 		uses[use.Loc] = true
 	}
@@ -559,17 +560,17 @@ func (db *SymbolsDB) GetSymbolUses(useReq *SymbolLocReq) []*SymbolLocReq {
 			continue
 		}
 
-		htudb, err := db.GetTUSymbolsDB(decl.File)
+		htudb, err := db.GetSymbolsTUDB(decl.File)
 		if err != nil {
 			continue
 		}
 
-		for tuSha1, _ := range htudb.Includers {
+		for tuSha1 := range htudb.Includers {
 			if tuSha1 == fileSha1 {
 				continue
 			}
 
-			otudb, err := db.GetTUSymbolsDB(tuSha1)
+			otudb, err := db.GetSymbolsTUDB(tuSha1)
 			if err != nil {
 				continue
 			}
@@ -581,17 +582,17 @@ func (db *SymbolsDB) GetSymbolUses(useReq *SymbolLocReq) []*SymbolLocReq {
 		}
 	}
 
-	useLocs := []SymbolLoc{}
-	for useLoc, _ := range uses {
+	useLocs := []symbolLoc{}
+	for useLoc := range uses {
 		useLocs = append(useLocs, useLoc)
 	}
 
 	return db.getSymbolLocReq(useLocs)
 }
 
-func (db *SymbolsDB) GetSymbolDef(useReq *SymbolLocReq) *SymbolLocReq {
+func (db *symbolsDB) GetSymbolDef(useReq *SymbolLocReq) *SymbolLocReq {
 	loc := getSymbolLoc(useReq)
-	tudb, err := db.GetTUSymbolsDB(loc.File)
+	tudb, err := db.GetSymbolsTUDB(loc.File)
 	if err != nil {
 		return nil
 	}
@@ -600,7 +601,7 @@ func (db *SymbolsDB) GetSymbolDef(useReq *SymbolLocReq) *SymbolLocReq {
 	// if header file, we should use any of its tudb
 	if len(tudb.Includers) > 0 {
 		tudb = getIncluder(tudb)
-		fileSha1 = GetStringEncode(tudb.File)
+		fileSha1 = getStringEncode(tudb.File)
 	}
 
 	// checking if we have the location in DB
@@ -612,7 +613,7 @@ func (db *SymbolsDB) GetSymbolDef(useReq *SymbolLocReq) *SymbolLocReq {
 	data := tudb.SymData[id]
 
 	if data.DefAvail {
-		return db.getSymbolLocReq([]SymbolLoc{data.Def})[0]
+		return db.getSymbolLocReq([]symbolLoc{data.Def})[0]
 	}
 
 	for _, decl := range data.Decls {
@@ -620,24 +621,24 @@ func (db *SymbolsDB) GetSymbolDef(useReq *SymbolLocReq) *SymbolLocReq {
 			continue
 		}
 
-		htudb, err := db.GetTUSymbolsDB(decl.File)
+		htudb, err := db.GetSymbolsTUDB(decl.File)
 		if err != nil {
 			continue
 		}
 
-		for tuSha1, _ := range htudb.Includers {
+		for tuSha1 := range htudb.Includers {
 			if tuSha1 == fileSha1 {
 				continue
 			}
 
-			otudb, err := db.GetTUSymbolsDB(tuSha1)
+			otudb, err := db.GetSymbolsTUDB(tuSha1)
 			if err != nil {
 				continue
 			}
 
 			odata := otudb.SymData[id]
 			if odata.DefAvail {
-				return db.getSymbolLocReq([]SymbolLoc{odata.Def})[0]
+				return db.getSymbolLocReq([]symbolLoc{odata.Def})[0]
 			}
 		}
 	}
@@ -645,7 +646,7 @@ func (db *SymbolsDB) GetSymbolDef(useReq *SymbolLocReq) *SymbolLocReq {
 	return nil
 }
 
-func (db *SymbolsDB) GetAllSymbolDefs(use *SymbolLocReq) []*SymbolLocReq {
+func (db *symbolsDB) GetAllSymbolDefs(use *SymbolLocReq) []*SymbolLocReq {
 	// TODO: this worked nice in the old sqlite DB as we had all
 	// definitions in a single table. Now, we would have to look on all
 	// files to get the same result. We could look in the includers of the
@@ -655,22 +656,22 @@ func (db *SymbolsDB) GetAllSymbolDefs(use *SymbolLocReq) []*SymbolLocReq {
 
 ///// TU Symbol methods
 
-func NewTUSymbolsDB(file string, mtime time.Time) *TUSymbolsDB {
-	return &TUSymbolsDB{
+func newSymbolsTUDB(file string, mtime time.Time) *symbolsTUDB {
+	return &symbolsTUDB{
 		File:  file,
 		Mtime: mtime,
 
-		SymLoc:    make(map[SymbolLoc]SymbolID),
-		SymData:   make(map[SymbolID]SymbolData),
-		Headers:   make(map[FileID]time.Time),
-		Includers: make(map[FileID]bool),
+		SymLoc:    make(map[symbolLoc]symbolID),
+		SymData:   make(map[symbolID]symbolData),
+		Headers:   make(map[fileID]time.Time),
+		Includers: make(map[fileID]bool),
 
 		headersTUDB: make(map[string]bool),
 	}
 }
 
-func LoadTUSymbolsDB(dbPath string) (*TUSymbolsDB, error) {
-	var tudb TUSymbolsDB
+func loadSymbolsTUDB(dbPath string) (*symbolsTUDB, error) {
+	var tudb symbolsTUDB
 
 	dbFile, err := os.Open(dbPath)
 	if err != nil {
@@ -688,7 +689,7 @@ func LoadTUSymbolsDB(dbPath string) (*TUSymbolsDB, error) {
 	return &tudb, nil
 }
 
-func (db *TUSymbolsDB) SaveTUSymbolsDB(path string) error {
+func (db *symbolsTUDB) SaveSymbolsTUDB(path string) error {
 	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
 	dbFile, err := os.OpenFile(path, flags, 0644)
 	if err != nil {
@@ -706,20 +707,20 @@ func (db *TUSymbolsDB) SaveTUSymbolsDB(path string) error {
 	return nil
 }
 
-func (db *TUSymbolsDB) getSymbolData(id SymbolID) SymbolData {
+func (db *symbolsTUDB) getSymbolData(id symbolID) symbolData {
 	data, exist := db.SymData[id]
 	if !exist {
-		data = SymbolData{
-			Uses:  []SymbolUse{},
-			Decls: []SymbolLoc{},
+		data = symbolData{
+			Uses:  []symbolUse{},
+			Decls: []symbolLoc{},
 		}
 	}
 
 	return data
 }
 
-func (db *TUSymbolsDB) insertSymbolDeclWithDef(sym, def *SymbolInfo) {
-	id := GetStringEncode(sym.usr)
+func (db *symbolsTUDB) insertSymbolDeclWithDef(sym, def *symbolInfo) {
+	id := getStringEncode(sym.usr)
 	symLoc := getSymbolLoc(&sym.loc)
 
 	data := db.getSymbolData(id)
@@ -733,25 +734,25 @@ func (db *TUSymbolsDB) insertSymbolDeclWithDef(sym, def *SymbolInfo) {
 	db.SymData[id] = data
 }
 
-func (db *TUSymbolsDB) InsertSymbolDecl(sym *SymbolInfo) {
+func (db *symbolsTUDB) InsertSymbolDecl(sym *symbolInfo) {
 	db.insertSymbolDeclWithDef(sym, nil)
 }
 
-func (db *TUSymbolsDB) InsertSymbolDeclWithDef(sym, def *SymbolInfo) {
+func (db *symbolsTUDB) InsertSymbolDeclWithDef(sym, def *symbolInfo) {
 	db.insertSymbolDeclWithDef(sym, def)
 }
 
-func (db *TUSymbolsDB) InsertSymbolUse(sym, dec *SymbolInfo, funcCall bool) {
+func (db *symbolsTUDB) InsertSymbolUse(sym, dec *symbolInfo, funcCall bool) {
 	if dec == nil {
 		log.Println("use without decl, ignoring", sym)
 		return
 	}
 
-	id := GetStringEncode(dec.usr)
+	id := getStringEncode(dec.usr)
 	symLoc := getSymbolLoc(&sym.loc)
 
 	data := db.getSymbolData(id)
-	data.Uses = append(data.Uses, SymbolUse{
+	data.Uses = append(data.Uses, symbolUse{
 		Loc:      *symLoc,
 		FuncCall: funcCall,
 	})
@@ -760,7 +761,7 @@ func (db *TUSymbolsDB) InsertSymbolUse(sym, dec *SymbolInfo, funcCall bool) {
 	db.SymData[id] = data
 }
 
-func (db *TUSymbolsDB) InsertHeader(inclPath string, headFile clang.File) {
+func (db *symbolsTUDB) InsertHeader(inclPath string, headFile clang.File) {
 	var headModTime time.Time
 	var headPath string
 	if headFile.Name() == "" {
@@ -770,11 +771,11 @@ func (db *TUSymbolsDB) InsertHeader(inclPath string, headFile clang.File) {
 		headModTime = headFile.ModTime()
 		headPath = headFile.Name()
 	}
-	db.Headers[GetStringEncode(headPath)] = headModTime
+	db.Headers[getStringEncode(headPath)] = headModTime
 	db.headersTUDB[headPath] = true
 }
 
-func (db *TUSymbolsDB) TempSaveDB() error {
+func (db *symbolsTUDB) TempSaveDB() error {
 	tmpFile, err := ioutil.TempFile(dbDirTmp, "")
 	if err != nil {
 		return err
@@ -782,7 +783,7 @@ func (db *TUSymbolsDB) TempSaveDB() error {
 	defer tmpFile.Close()
 
 	db.tmpFile = tmpFile.Name()
-	err = db.SaveTUSymbolsDB(db.tmpFile)
+	err = db.SaveSymbolsTUDB(db.tmpFile)
 	if err != nil {
 		return err
 	}

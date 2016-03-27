@@ -31,10 +31,10 @@ package main
  * For increased parallelism, we have multiple go routines for parsing (function
  * parseFiles). By default, there will be as many parseFiles go routines as CPUs
  * available. This function will simply take a file name, call the parser, and
- * return the TUSymbolsDB created by the parser (presumibly for its insertion in
+ * return the symbolsTUDB created by the parser (presumibly for its insertion in
  * the DB). Function handleFiles sends files to be parsed according to its needs
  * (e.g. a new file was created, a file was changed, etc). It will later get the
- * new TUSymbolsDB and insert it in the DB.
+ * new symbolsTUDB and insert it in the DB.
  *
  *   +-----------------+
  *   | exploreIndexDir |
@@ -99,7 +99,7 @@ var toParseQueue *list.List
 var inFlight map[string]bool
 var nIndexingThreads int
 var parseFile chan string
-var doneFile chan *TUSymbolsDB
+var doneFile chan *symbolsTUDB
 var foundFile, foundHeader, removeFile chan string
 var flush <-chan time.Time
 var newConn chan net.Conn
@@ -107,7 +107,7 @@ var newConn chan net.Conn
 var wg sync.WaitGroup
 var watcher *fsnotify.Watcher
 
-var db *SymbolsDB
+var db *symbolsDB
 var rh *RequestHandler
 
 func traversePath(path string, visitDir func(string), visitC func(string), visitRest func(string)) {
@@ -154,7 +154,7 @@ func queueFilesToParse(files ...string) {
 	}
 }
 
-func doneFileToParse(tudb *TUSymbolsDB) {
+func doneFileToParse(tudb *symbolsTUDB) {
 	if !toParseMap[tudb.File] {
 		db.InsertTUDB(tudb)
 	}
@@ -269,7 +269,7 @@ func parseFiles(indexDir []string) {
 	wg.Add(1)
 	defer wg.Done()
 
-	pa := NewParser(indexDir)
+	pa := newParser(indexDir)
 
 	for file := range parseFile {
 		log.Println("parsing", file)
@@ -363,7 +363,7 @@ func exploreIndexDir(indexDir []string) {
 	}
 }
 
-func StartFilesHandler(indexDir []string, inputIndexThreads int, dbDir string) error {
+func startFilesHandler(indexDir []string, inputIndexThreads int, dbDir string) error {
 	var err error
 
 	toParseMap = make(map[string]bool)
@@ -371,7 +371,7 @@ func StartFilesHandler(indexDir []string, inputIndexThreads int, dbDir string) e
 	inFlight = make(map[string]bool)
 	nIndexingThreads = inputIndexThreads
 	parseFile = make(chan string)
-	doneFile = make(chan *TUSymbolsDB)
+	doneFile = make(chan *symbolsTUDB)
 	foundFile = make(chan string)
 	foundHeader = make(chan string)
 	removeFile = make(chan string)
@@ -381,17 +381,17 @@ func StartFilesHandler(indexDir []string, inputIndexThreads int, dbDir string) e
 		return err
 	}
 	flush = time.Tick(time.Duration(flushTime) * time.Second)
-	db = NewSymbolsDB(dbDir)
-	rh = NewRequestHandler(db)
+	db = newSymbolsDB(dbDir)
+	rh = newRequestHandler(db)
 
-	go ListenRequests(newConn)
+	go listenRequests(newConn)
 	go handleFiles(indexDir)
 	go exploreIndexDir(indexDir)
 
 	return nil
 }
 
-func CloseFilesHandler() {
+func closeFilesHandler() {
 	close(parseFile)
 	close(doneFile)
 	watcher.Close()

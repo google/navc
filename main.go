@@ -71,12 +71,12 @@ func main() {
 	}
 
 	// start files handler
-	err := StartFilesHandler(indexDir, nIndexingThreads, dbDir)
+	err := startFilesHandler(indexDir, nIndexingThreads, dbDir)
 	if err != nil {
 		log.Println("unable to start daemon", err)
 		return
 	}
-	defer CloseFilesHandler()
+	defer closeFilesHandler()
 
 	// wait until ctl-c is pressed
 	select {

@@ -26,7 +26,7 @@ import (
 	"github.com/sbinet/go-clang"
 )
 
-type Parser struct {
+type parse struct {
 	cas map[string][]string
 }
 
@@ -131,8 +131,8 @@ func getCompArgs(command, path string) []string {
 	return args
 }
 
-func NewParser(inputDirs []string) *Parser {
-	ret := &Parser{make(map[string][]string)}
+func newParser(inputDirs []string) *parse {
+	ret := &parse{make(map[string][]string)}
 
 	// read compilation args db and fix files paths
 	for _, path := range inputDirs {
@@ -162,14 +162,14 @@ func NewParser(inputDirs []string) *Parser {
 	return ret
 }
 
-func getSymbolFromCursor(cursor *clang.Cursor) *SymbolInfo {
+func getSymbolFromCursor(cursor *clang.Cursor) *symbolInfo {
 	if cursor.IsNull() {
 		return nil
 	}
 
 	f, line, col, _ := cursor.Location().GetFileLocation()
 	fName := filepath.Clean(f.Name())
-	return &SymbolInfo{
+	return &symbolInfo{
 		name: cursor.Spelling(),
 		usr:  cursor.USR(),
 		loc: SymbolLocReq{
@@ -180,7 +180,7 @@ func getSymbolFromCursor(cursor *clang.Cursor) *SymbolInfo {
 	}
 }
 
-func (pa *Parser) Parse(file string) *TUSymbolsDB {
+func (pa *parse) Parse(file string) *symbolsTUDB {
 	idx := clang.NewIndex(0, 0)
 	defer idx.Dispose()
 
@@ -191,7 +191,7 @@ func (pa *Parser) Parse(file string) *TUSymbolsDB {
 	tu := idx.Parse(file, args, nil, clang.TU_DetailedPreprocessingRecord)
 	defer tu.Dispose()
 
-	db := NewTUSymbolsDB(file, tu.File(file).ModTime())
+	db := newSymbolsTUDB(file, tu.File(file).ModTime())
 	defer db.TempSaveDB()
 
 	visitNode := func(cursor, parent clang.Cursor) clang.ChildVisitResult {
