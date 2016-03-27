@@ -47,14 +47,14 @@ import (
  *
  * - Mtime: Modification time of the file when was indexed.
  *
- * - Headers (FileID -> Time): Contains all the header files included in the
+ * - Headers (fileID -> Time): Contains all the header files included in the
  * translation unit and the modification time of each when the translation unit
  * was indexed.
  *
- * - SymLoc (SymbolLoc -> SymbolID): Contains all the symbols uses in the
+ * - SymLoc (symbolLoc -> symbolID): Contains all the symbols uses in the
  * translatio unit. It maps symbol locations to symbol ID.
  *
- * - SymData (SymbolID -> SymbolData): Contains the data of all the symbols
+ * - SymData (symbolID -> symbolData): Contains the data of all the symbols
  * indexed by symbol ID. Given any symbol location, we can find its symbol data
  * in the translation unit. The symbol data will have the list of declarations
  * of the symbol and the list of uses in the translation unit. If the definition
@@ -66,11 +66,11 @@ import (
  * information necessary for header files. Header files is where two translation
  * units meet. For instance, one function declared in a.h and used by a.c can be
  * defined in b.c. The meeting point of a.c and b.c is their included header
- * file a.h. Keeping this information is not really necessary but * it speed up
- * lookup of symbols. In theory, these can be recreated from the * regular
- * trnaslation units.
+ * file a.h. Keeping this information is not really necessary but it speed up
+ * lookup of symbols. In theory, these can be recreated from the regular
+ * translation units.
  *
- * FileID and SymbolID are simply a hash of the name of the file or symbol. In
+ * fileID and symbolID are simply a hash of the name of the file or symbol. In
  * this case, it is the sha1 hash of the names.
  *
  * symbolsDB has a map with an entry for every symbolsTUDB. On each entry, it

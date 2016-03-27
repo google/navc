@@ -22,9 +22,9 @@ package main
  * file creation, deletion, renaming, and modification. There are also events
  * for DB queries, and a timer for DB flushing.
  *
- * Everything is initialized in StartFilesHandler. All the events are handled in
+ * Everything is initialized in startFilesHandler. All the events are handled in
  * the handleFiles go routine. The file discovery is run once at daemon start up
- * and it is exected by exploreIndexDir function. Function ListenRequests
+ * and it is exected by exploreIndexDir function. Function listenRequests
  * listens for any new query and sends the requests to handleFiles for
  * processing.
  *
@@ -49,7 +49,7 @@ package main
  *           |
  *           |
  *   +----------------+
- *   | ListenRequests |
+ *   | listenRequests |
  *   +----------------+
  */
 
