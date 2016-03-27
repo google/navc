@@ -10,7 +10,8 @@ List of Query Capabilities
 ==========================
 * Uses of a symbol
 * Definition of a function
-* All declarations of a symbol: functions, variables, structs, typedef, enums, defines.
+* All declarations of a symbol: functions, variables, structs, typedef, enums,
+defines.
 
 Installation
 ============
@@ -55,7 +56,8 @@ If you have a non-standard set of compilation flags (usual on large projects),
 you probably want to use clang's
 [compile_commands.json](http://clang.llvm.org/docs/JSONCompilationDatabase.html)
 database. This can be generated with [bear](https://github.com/rizsotto/Bear) or
-with cmake if available. Assuming that a project is compiled with make (e.g. Linux kernel) you simply need to run:
+with cmake if available. Assuming that a project is compiled with make (e.g.
+Linux kernel) you simply need to run:
 ```
 	$ bear make
 ```
@@ -73,12 +75,16 @@ the symbol to query and issue one of the following commands:
 Caveats
 =======
 
-1. Since go version 1.6, the go clang library is having issues with pointers. To bypass this problem for now, navc has to be run disabling the pointer checks:
+1. Since go version 1.6, the go clang library is having issues with pointers. To
+bypass this problem for now, navc has to be run disabling the pointer checks:
 ```
 	$ GODEBUG=cgocheck=0 navc
 ```
 1. Currently, to update the compile\_commands.json file in memory, the daemon
 has to be restarted.
+1. For large projects on Mac, the daemon fail due to too many open files. This
+is because every file watched counts as an open file. This could maybe be fixed
+with recursive watching.
 
 
 TODO
