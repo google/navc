@@ -248,8 +248,6 @@ func (pa *Parser) Parse(file string) *TUSymbolsDB {
 			db.InsertHeader(cursor.Spelling(), incFile)
 		}
 
-		// TODO: eventually we need to continue on some cases for
-		// faster run
 		return clang.CVR_Recurse
 	}
 

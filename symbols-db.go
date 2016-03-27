@@ -31,12 +31,25 @@ import (
 )
 
 /*
- * The symbols database consist of a key/value store per indexed C file. We
- * call this translation unit or TU (following clang's definition). Having a
- * database per translation unit will allow greater parallelism and higher
- * performance at indexing time. In the symbols directory, each database file
- * uses the sha1 of the original file name as file name. Each database will
- * have the following fields:
+ * The symbols database keeps all the index of the code. We keep one file (or
+ * database file) per indexed C file. This file will contain the information of
+ * the code in the C file and all the headers included recursively (the headers
+ * included in the headers). We call this translation unit or TU (following
+ * clang's nomenclature). Having a database per translation unit will allow
+ * greater parallelism and higher performance at indexing time. All these files
+ * are stored in the symbols directory, .navc_dbsymbols by default, and
+ * represented by the struct SymbolsDB. In the symbols directory, each database
+ * file uses the sha1 of the original file name as file name. The file will
+ * simply have a serialized form of some of the fields in the structure
+ * TUSymbolsDB. This structure has the following fields:
+ *
+ * - File: Name of the source file indexed.
+ *
+ * - Mtime: Modification time of the file when was indexed.
+ *
+ * - Headers (FileID -> Time): Contains all the header files included in the
+ * translation unit and the modification time of each when the translation unit
+ * was indexed.
  *
  * - SymLoc (SymbolLoc -> SymbolID): Contains all the symbols uses in the
  * translatio unit. It maps symbol locations to symbol ID.
@@ -44,31 +57,28 @@ import (
  * - SymData (SymbolID -> SymbolData): Contains the data of all the symbols
  * indexed by symbol ID. Given any symbol location, we can find its symbol data
  * in the translation unit. The symbol data will have the list of declarations
- * of the symbol and the list of uses in the translation unit. If the
- * definition of the symbol is available in this translation unit, DefAvail
- * will be true and Def will hold the location of the definition.
- *
- * - Headers: Contains a list of all the header files included in the
- * translation unit.
+ * of the symbol and the list of uses in the translation unit. If the definition
+ * of the symbol is available in this translation unit, DefAvail will be true
+ * and Def will hold the location of the definition.
  *
  * - Includers: In case the translation unit represent a header file, this list
  * will have all the translation units including this file. This is the only
- * information necessary for header files. Header files is where two
- * translation units meet. For instance, one function declared in a.h and used
- * by a.c can be defined in b.c. The meeting point of a.c and b.c is their
- * included header file a.h. Keeping this information is important to find all
- * the uses of a symbol or function definitions.
+ * information necessary for header files. Header files is where two translation
+ * units meet. For instance, one function declared in a.h and used by a.c can be
+ * defined in b.c. The meeting point of a.c and b.c is their included header
+ * file a.h. Keeping this information is not really necessary but * it speed up
+ * lookup of symbols. In theory, these can be recreated from the * regular
+ * trnaslation units.
  *
- * - Misc: Contains the information of the file:
- *	* File: Name of the file.
- *	* Mtime: Last modification timestamp.
+ * FileID and SymbolID are simply a hash of the name of the file or symbol. In
+ * this case, it is the sha1 hash of the names.
  *
- * Note 1: In the value part on the maps it is not necessary to store the
- * location as it is already in the key.
- * Note 2: SymbolsDB represents the whole index DB, while TUSymbolsDB
- * represents a single file DB.
- * Note 3: Header file databases does not have "SymLoc", "SymData", or
- * "Headers".
+ * SymbolsDB has a map with an entry for every TUSymbolsDB. On each entry, it
+ * caches some information of the translation unit. Translations units are
+ * inserted in the InsertTUDB function. This function will also be called to
+ * replace an old translation unit of a file. Translation units will be
+ * persisted to disk whenever the SymbolsDB is flushed. This is done by calling
+ * the FlushDB function.
  */
 
 type SymbolID [sha1.Size]byte

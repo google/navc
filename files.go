@@ -16,22 +16,60 @@
 
 package main
 
-/* TODO(useche): text explaining what is going on here */
+/*
+ * This module handles all file changes and serialize accesses to the DB
+ * (symbols-db.go). It is event driven. There are events for file discovery,
+ * file creation, deletion, renaming, and modification. There are also events
+ * for DB queries, and a timer for DB flushing.
+ *
+ * Everything is initialized in StartFilesHandler. All the events are handled in
+ * the handleFiles go routine. The file discovery is run once at daemon start up
+ * and it is exected by exploreIndexDir function. Function ListenRequests
+ * listens for any new query and sends the requests to handleFiles for
+ * processing.
+ *
+ * For increased parallelism, we have multiple go routines for parsing (function
+ * parseFiles). By default, there will be as many parseFiles go routines as CPUs
+ * available. This function will simply take a file name, call the parser, and
+ * return the TUSymbolsDB created by the parser (presumibly for its insertion in
+ * the DB). Function handleFiles sends files to be parsed according to its needs
+ * (e.g. a new file was created, a file was changed, etc). It will later get the
+ * new TUSymbolsDB and insert it in the DB.
+ *
+ *   +-----------------+
+ *   | exploreIndexDir |
+ *   +-----------------+
+ *           |
+ *           |
+ *           v
+ *    +-------------+               +----------------------------+
+ *    | handleFiles |  <--------->  | (# cpu cores) x parseFiles |
+ *    +-------------+               +----------------------------+
+ *           ^
+ *           |
+ *           |
+ *   +----------------+
+ *   | ListenRequests |
+ *   +----------------+
+ */
 
-// NOTE: There is a potential race if a included header is removed and created
-// quickly (this could be the case for vim and its backup files). To exemplofy
-// the issue, assume a file a.c that includes a header b.h. The race goes like
-// this:
-// 1. b.h is removed and navc quickly reparse a.c but does not add it yet to the
-//    DB. This new TUDB will have b.h as a potential header, but not a real one.
-// 2. While parsing, b.h is created again and navc look for potential files
-//    including a header named b.h. However, it does not find one because in the
-//    DB, a.c still have b.h as dependency. Hence, it ignores the create event.
-// 3. The new TUDB (the one without the b.h dependency) is inserted in the DB.
-//
-// In practice I havn't seen this occurring, but it might happen. The consequence
-// is that any change to b.h will not cause navc to reparse a.c. This can be
-// easily fixed in the next navc reboot or by writing to a.c for reparsing.
+/*
+ * NOTE: There is a potential race if a included header is removed and created
+ * quickly (this could be the case for vim and its backup files). To exemplofy
+ * the issue, assume a file a.c that includes a header b.h. The race goes like
+ * this:
+ * 1. b.h is removed and navc quickly reparse a.c but does not add it yet to the
+ *    DB. This new TUDB will have b.h as a potential header, but not a real one.
+ * 2. While parsing, b.h is created again and navc look for potential files
+ *    including a header named b.h. However, it does not find one because in the
+ *    DB, a.c still have b.h as dependency. Hence, it ignores the create event.
+ * 3. The new TUDB (the one without the b.h dependency) is inserted in the DB.
+ *
+ * In practice I havn't seen this occurring, but it might happen. The
+ * consequence is that any change to b.h will not cause navc to reparse a.c.
+ * This can be easily fixed in the next navc reboot or by writing to a.c for
+ * reparsing.
+ */
 
 import (
 	"container/list"
