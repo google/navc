@@ -780,10 +780,10 @@ func (db *symbolsTUDB) InsertHeader(inclPath string, headFile clang.File) {
 	var headPath string
 	if headFile.Name() == "" {
 		headModTime = time.Time{}
-		headPath = nonExistingHeaderName(inclPath)
+		headPath = nonExistingHeaderName(filepath.Clean(inclPath))
 	} else {
 		headModTime = headFile.ModTime()
-		headPath = headFile.Name()
+		headPath = filepath.Clean(headFile.Name())
 	}
 	db.Headers[getStringEncode(headPath)] = headModTime
 	db.headersTUDB[headPath] = true
