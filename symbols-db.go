@@ -96,6 +96,7 @@ type symbolUse struct {
 }
 
 type symbolData struct {
+	Name     string
 	Uses     []symbolUse
 	Decls    []symbolLoc
 	DefAvail bool
@@ -654,6 +655,18 @@ func (db *symbolsDB) GetAllSymbolDefs(use *SymbolLocReq) []*SymbolLocReq {
 	return nil
 }
 
+func (db *symbolsDB) PrintAndCheckSymbolsTUDB(inputPath string) error {
+	path := filepath.Clean(inputPath)
+	tudb, err := db.GetSymbolsTUDB(getStringEncode(path))
+	if err != nil {
+		return err
+	}
+
+	tudb.printAndCheck()
+
+	return nil
+}
+
 ///// TU Symbol methods
 
 func newSymbolsTUDB(file string, mtime time.Time) *symbolsTUDB {
@@ -707,10 +720,11 @@ func (db *symbolsTUDB) SaveSymbolsTUDB(path string) error {
 	return nil
 }
 
-func (db *symbolsTUDB) getSymbolData(id symbolID) symbolData {
+func (db *symbolsTUDB) getSymbolData(id symbolID, name string) symbolData {
 	data, exist := db.SymData[id]
 	if !exist {
 		data = symbolData{
+			Name:  name,
 			Uses:  []symbolUse{},
 			Decls: []symbolLoc{},
 		}
@@ -723,7 +737,7 @@ func (db *symbolsTUDB) insertSymbolDeclWithDef(sym, def *symbolInfo) {
 	id := getStringEncode(sym.usr)
 	symLoc := getSymbolLoc(&sym.loc)
 
-	data := db.getSymbolData(id)
+	data := db.getSymbolData(id, sym.name)
 	data.Decls = append(data.Decls, *symLoc)
 	if def != nil {
 		data.DefAvail = true
@@ -751,7 +765,7 @@ func (db *symbolsTUDB) InsertSymbolUse(sym, dec *symbolInfo, funcCall bool) {
 	id := getStringEncode(dec.usr)
 	symLoc := getSymbolLoc(&sym.loc)
 
-	data := db.getSymbolData(id)
+	data := db.getSymbolData(id, sym.name)
 	data.Uses = append(data.Uses, symbolUse{
 		Loc:      *symLoc,
 		FuncCall: funcCall,
@@ -789,4 +803,54 @@ func (db *symbolsTUDB) TempSaveDB() error {
 	}
 
 	return nil
+}
+
+func (db *symbolsTUDB) check() {
+	// check sym data
+	for _, data := range db.SymData {
+		for _, use := range data.Uses {
+			if _, exists := db.SymLoc[use.Loc]; !exists {
+				log.Println("Use in SymData not in DB!", use)
+			}
+		}
+	}
+
+	// check uses
+	for loc, id := range db.SymLoc {
+		if _, exists := db.SymData[id]; !exists {
+			log.Println("Use without data!", loc, id)
+		}
+	}
+}
+
+func (db *symbolsTUDB) printAndCheck() {
+	if len(db.SymData) > 0 {
+		fmt.Println("Data:")
+		for id, data := range db.SymData {
+			fmt.Println(id, "->")
+			fmt.Println("\tName:", data.Name)
+			fmt.Println("\tDefAvail:", data.DefAvail)
+			fmt.Println("\tDef:", data.Def)
+			fmt.Println("\tDecls:")
+			for _, decl := range data.Decls {
+				fmt.Println("\t\t", decl)
+			}
+			fmt.Println("\tUses:")
+			for _, use := range data.Uses {
+				fmt.Println("\t\t", use)
+			}
+		}
+		fmt.Println("Loc:")
+		for loc, id := range db.SymLoc {
+			fmt.Println("\t", loc, "->", id)
+		}
+		db.check()
+	}
+
+	if len(db.Includers) > 0 {
+		fmt.Println("Includers:")
+		for fileID := range db.Includers {
+			fmt.Println("\t", fileID)
+		}
+	}
 }

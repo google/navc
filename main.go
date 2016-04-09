@@ -39,6 +39,10 @@ func main() {
 	flag.BoolVar(&resetDB, "resetDB", false,
 		"Reset symbols DB and start over")
 
+	// print file db and exit
+	var dbFilePrint string
+	flag.StringVar(&dbFilePrint, "dbFilePrint", "", "DB file to print")
+
 	flag.Parse()
 
 	// list of directores with source to index
@@ -58,6 +62,15 @@ func main() {
 		}
 	} else {
 		indexDir = []string{"."}
+	}
+
+	if dbFilePrint != "" {
+		db := newSymbolsDB(dbDir)
+		err := db.PrintAndCheckSymbolsTUDB(dbFilePrint)
+		if err != nil {
+			log.Println(err)
+		}
+		return
 	}
 
 	// handle interrup and kill signals
