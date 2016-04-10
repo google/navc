@@ -23,7 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sbinet/go-clang"
+	"github.com/go-clang/v3.6/clang"
 )
 
 type parse struct {
@@ -167,7 +167,7 @@ func getSymbolFromCursor(cursor *clang.Cursor) *symbolInfo {
 		return nil
 	}
 
-	f, line, col, _ := cursor.Location().GetFileLocation()
+	f, line, col, _ := cursor.Location().FileLocation()
 	fName := filepath.Clean(f.Name())
 	return &symbolInfo{
 		name: cursor.Spelling(),
@@ -188,15 +188,15 @@ func (pa *parse) Parse(file string) *symbolsTUDB {
 	if !ok {
 		args = []string{}
 	}
-	tu := idx.Parse(file, args, nil, clang.TU_DetailedPreprocessingRecord)
+	tu := idx.ParseTranslationUnit(file, args, nil, clang.TranslationUnit_DetailedPreprocessingRecord)
 	defer tu.Dispose()
 
-	db := newSymbolsTUDB(file, tu.File(file).ModTime())
+	db := newSymbolsTUDB(file, tu.File(file).Time())
 	defer db.TempSaveDB()
 
 	visitNode := func(cursor, parent clang.Cursor) clang.ChildVisitResult {
 		if cursor.IsNull() {
-			return clang.CVR_Continue
+			return clang.ChildVisit_Continue
 		}
 
 		cur := getSymbolFromCursor(&cursor)
@@ -204,7 +204,7 @@ func (pa *parse) Parse(file string) *symbolsTUDB {
 
 		if curFile == "" || curFile == "." {
 			// ignore system code
-			return clang.CVR_Continue
+			return clang.ChildVisit_Continue
 		}
 
 		// TODO: erase! this is not required
@@ -217,41 +217,41 @@ func (pa *parse) Parse(file string) *symbolsTUDB {
 		}
 		////////////////////////////////////
 		switch cursor.Kind() {
-		case clang.CK_FunctionDecl, clang.CK_StructDecl, clang.CK_FieldDecl,
-			clang.CK_TypedefDecl, clang.CK_EnumDecl, clang.CK_EnumConstantDecl:
-			defCursor := cursor.DefinitionCursor()
+		case clang.Cursor_FunctionDecl, clang.Cursor_StructDecl, clang.Cursor_FieldDecl,
+			clang.Cursor_TypedefDecl, clang.Cursor_EnumDecl, clang.Cursor_EnumConstantDecl:
+			defCursor := cursor.Definition()
 			if !defCursor.IsNull() {
 				def := getSymbolFromCursor(&defCursor)
 				db.InsertSymbolDeclWithDef(cur, def)
 			} else {
 				db.InsertSymbolDecl(cur)
 			}
-		case clang.CK_MacroDefinition:
+		case clang.Cursor_MacroDefinition:
 			db.InsertSymbolDeclWithDef(cur, cur)
-		case clang.CK_VarDecl:
+		case clang.Cursor_VarDecl:
 			db.InsertSymbolDecl(cur)
-		case clang.CK_ParmDecl:
+		case clang.Cursor_ParmDecl:
 			if cursor.Spelling() != "" {
 				db.InsertSymbolDecl(cur)
 			}
-		case clang.CK_CallExpr:
+		case clang.Cursor_CallExpr:
 			decCursor := cursor.Referenced()
 			dec := getSymbolFromCursor(&decCursor)
 			db.InsertSymbolUse(cur, dec, true)
-		case clang.CK_DeclRefExpr, clang.CK_TypeRef, clang.CK_MemberRefExpr,
-			clang.CK_MacroExpansion:
+		case clang.Cursor_DeclRefExpr, clang.Cursor_TypeRef, clang.Cursor_MemberRefExpr,
+			clang.Cursor_MacroExpansion:
 			decCursor := cursor.Referenced()
 			dec := getSymbolFromCursor(&decCursor)
 			db.InsertSymbolUse(cur, dec, false)
-		case clang.CK_InclusionDirective:
+		case clang.Cursor_InclusionDirective:
 			incFile := cursor.IncludedFile()
 			db.InsertHeader(cursor.Spelling(), incFile)
 		}
 
-		return clang.CVR_Recurse
+		return clang.ChildVisit_Recurse
 	}
 
-	tu.ToCursor().Visit(visitNode)
+	tu.TranslationUnitCursor().Visit(visitNode)
 
 	return db
 }

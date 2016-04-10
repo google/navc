@@ -15,12 +15,12 @@ defines.
 
 Installation
 ============
-You need to have the development headers for clang. In Ubuntu this is the
-package ``libclang_dev``. Once this is installed, you need to simply run:
+You need to have the development headers for clang 3.6. In Ubuntu this is the
+package ``libclang-3.6-dev`` and in mac's homebrew ``homebrew/versions/llvm36``.
+Once this is installed, you need to simply run:
 
 ```
-	CGO_CFLAGS="-I`llvm-config --includedir`" \
-	CGO_LDFLAGS="-L`llvm-config --libdir`" \
+	CGO_LDFLAGS="-L`llvm-config-3.6 --libdir`" \
 	go get github.com/google/navc
 ```
 

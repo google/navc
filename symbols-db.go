@@ -27,7 +27,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/sbinet/go-clang"
+	"github.com/go-clang/v3.6/clang"
 )
 
 /*
@@ -782,7 +782,7 @@ func (db *symbolsTUDB) InsertHeader(inclPath string, headFile clang.File) {
 		headModTime = time.Time{}
 		headPath = nonExistingHeaderName(filepath.Clean(inclPath))
 	} else {
-		headModTime = headFile.ModTime()
+		headModTime = headFile.Time()
 		headPath = filepath.Clean(headFile.Name())
 	}
 	db.Headers[getStringEncode(headPath)] = headModTime
