@@ -764,8 +764,29 @@ func (db *symbolsTUDB) InsertSymbolUse(sym, dec *symbolInfo, funcCall bool) {
 
 	id := getStringEncode(dec.usr)
 	symLoc := getSymbolLoc(&sym.loc)
-
 	data := db.getSymbolData(id, sym.name)
+
+	if _, exist := db.SymLoc[*symLoc]; exist {
+		// The current symbol location was already registered. This
+		// could be for two reasons:
+
+		// 1. (TODO) A macro expanded in this location
+		if db.SymLoc[*symLoc] != id {
+			//symLoc = &db.SymData[db.SymLoc[*symLoc]].Decls[0]
+			return
+		}
+
+		// 2. A call expression that is also a referenced symbol
+		if len(data.Uses) > 0 {
+			lastUse := &data.Uses[len(data.Uses)-1]
+			if lastUse.Loc == *symLoc {
+				lastUse.FuncCall = lastUse.FuncCall || funcCall
+				return
+			}
+		}
+
+	}
+
 	data.Uses = append(data.Uses, symbolUse{
 		Loc:      *symLoc,
 		FuncCall: funcCall,
