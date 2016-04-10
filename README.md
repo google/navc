@@ -91,6 +91,9 @@ TODO
 ====
 * Have better logging and not log everything. In particular, it would be nice
 to have a progress bar while indexing code at start up.
+* Currently, symbols used in macros are ignored. We need to fix this problem.
+* Some array initialization are not been reported by clang (or go-clang). Hence,
+we are missing some symbol uses.
 * Watch all the compile\_commands.json files and update the database in memory
 with any change.
 
