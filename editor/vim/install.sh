@@ -28,5 +28,4 @@ if [ "$1" = "-u" ]; then
 fi
 
 mkdir -p $PLUGIN_DIR
-cp navc.vim $PLUGIN_DIR
-cp ../../third_party/jsonrpc/jsonrpc.py $PLUGIN_DIR
+cp navc.vim *.py $PLUGIN_DIR
