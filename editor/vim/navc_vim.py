@@ -78,11 +78,11 @@ def __get_file_line(fname, line):
 
 
 def __print_error(s):
-    vim.command(':echohl Error | echo "' + s + '" | echohl None')
+    vim.command(':echohl Error | echo "' + str(s) + '" | echohl None')
 
 
 def __print_warn(s):
-    vim.command(':echohl WarningMsg | echo "' + s + '" | echohl None')
+    vim.command(':echohl WarningMsg | echo "' + str(s) + '" | echohl None')
 
 
 def __get_multi_choice(options):

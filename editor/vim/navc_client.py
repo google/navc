@@ -23,7 +23,7 @@ class RequestError:
         self.error = error
 
     def __str__(self):
-        return repr(self.error)
+        return self.error
 
 
 def __get_json(method, args):
