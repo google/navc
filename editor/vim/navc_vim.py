@@ -24,7 +24,7 @@ prev_locs = []
 
 def __find_start_cur_symbol():
     row, col = vim.current.window.cursor
-    while fname_char.match(vim.current.buffer[row - 1][col - 1]):
+    while col > 0 and fname_char.match(vim.current.buffer[row - 1][col - 1]):
         col -= 1
     return (row, col + 1)
 
