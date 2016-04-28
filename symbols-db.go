@@ -506,11 +506,11 @@ func getIncluder(htudb *symbolsTUDB) *symbolsTUDB {
 	return nil
 }
 
-func (db *symbolsDB) GetSymbolDecl(useReq *SymbolLocReq) []*SymbolLocReq {
+func (db *symbolsDB) GetSymbolDecl(useReq *SymbolLocReq) ([]*SymbolLocReq, error) {
 	loc := getSymbolLoc(useReq)
 	tudb, err := db.GetSymbolsTUDB(loc.File)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 
 	// if header file, we should use any of its tudb
@@ -521,18 +521,18 @@ func (db *symbolsDB) GetSymbolDecl(useReq *SymbolLocReq) []*SymbolLocReq {
 	// checking if we have the location in DB
 	id, exist := tudb.SymLoc[*loc]
 	if !exist {
-		return nil
+		return nil, fmt.Errorf("Symbol use not found")
 	}
 
 	data := tudb.SymData[id]
-	return db.getSymbolLocReq(data.Decls)
+	return db.getSymbolLocReq(data.Decls), nil
 }
 
-func (db *symbolsDB) GetSymbolUses(useReq *SymbolLocReq) []*SymbolLocReq {
+func (db *symbolsDB) GetSymbolUses(useReq *SymbolLocReq) ([]*SymbolLocReq, error) {
 	loc := getSymbolLoc(useReq)
 	tudb, err := db.GetSymbolsTUDB(loc.File)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	fileSha1 := loc.File
 
@@ -545,7 +545,7 @@ func (db *symbolsDB) GetSymbolUses(useReq *SymbolLocReq) []*SymbolLocReq {
 	// checking if we have the location in DB
 	id, exist := tudb.SymLoc[*loc]
 	if !exist {
-		return nil
+		return nil, fmt.Errorf("Symbol use not found")
 	}
 
 	data := tudb.SymData[id]
@@ -588,14 +588,14 @@ func (db *symbolsDB) GetSymbolUses(useReq *SymbolLocReq) []*SymbolLocReq {
 		useLocs = append(useLocs, useLoc)
 	}
 
-	return db.getSymbolLocReq(useLocs)
+	return db.getSymbolLocReq(useLocs), nil
 }
 
-func (db *symbolsDB) GetSymbolDef(useReq *SymbolLocReq) *SymbolLocReq {
+func (db *symbolsDB) GetSymbolDef(useReq *SymbolLocReq) (*SymbolLocReq, error) {
 	loc := getSymbolLoc(useReq)
 	tudb, err := db.GetSymbolsTUDB(loc.File)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	fileSha1 := loc.File
 
@@ -608,13 +608,13 @@ func (db *symbolsDB) GetSymbolDef(useReq *SymbolLocReq) *SymbolLocReq {
 	// checking if we have the location in DB
 	id, exist := tudb.SymLoc[*loc]
 	if !exist {
-		return nil
+		return nil, fmt.Errorf("Symbol use not found")
 	}
 
 	data := tudb.SymData[id]
 
 	if data.DefAvail {
-		return db.getSymbolLocReq([]symbolLoc{data.Def})[0]
+		return db.getSymbolLocReq([]symbolLoc{data.Def})[0], nil
 	}
 
 	for _, decl := range data.Decls {
@@ -639,20 +639,20 @@ func (db *symbolsDB) GetSymbolDef(useReq *SymbolLocReq) *SymbolLocReq {
 
 			odata := otudb.SymData[id]
 			if odata.DefAvail {
-				return db.getSymbolLocReq([]symbolLoc{odata.Def})[0]
+				return db.getSymbolLocReq([]symbolLoc{odata.Def})[0], nil
 			}
 		}
 	}
 
-	return nil
+	return nil, fmt.Errorf("Definition not found")
 }
 
-func (db *symbolsDB) GetAllSymbolDefs(use *SymbolLocReq) []*SymbolLocReq {
+func (db *symbolsDB) GetAllSymbolDefs(use *SymbolLocReq) ([]*SymbolLocReq, error) {
 	// TODO: this worked nice in the old sqlite DB as we had all
 	// definitions in a single table. Now, we would have to look on all
 	// files to get the same result. We could look in the includers of the
 	// headers included. Return nothing for now.
-	return nil
+	return nil, fmt.Errorf("Definition not found")
 }
 
 func (db *symbolsDB) PrintAndCheckSymbolsTUDB(inputPath string) error {

@@ -17,7 +17,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"net"
 	"net/rpc"
@@ -35,9 +34,9 @@ type RequestHandler struct {
 // GetSymbolDecls gets a symbol use location and returns the list of
 // declarations for that symbol.
 func (rh *RequestHandler) GetSymbolDecls(use *SymbolLocReq, res *[]*SymbolLocReq) error {
-	dec := rh.db.GetSymbolDecl(use)
-	if dec == nil {
-		return fmt.Errorf("Symbol use not found")
+	dec, err := rh.db.GetSymbolDecl(use)
+	if err != nil {
+		return err
 	}
 	*res = dec
 	return nil
@@ -46,9 +45,9 @@ func (rh *RequestHandler) GetSymbolDecls(use *SymbolLocReq, res *[]*SymbolLocReq
 // GetSymbolUses gets a symbol use location and returns all the uses of that
 // symbol.
 func (rh *RequestHandler) GetSymbolUses(use *SymbolLocReq, res *[]*SymbolLocReq) error {
-	uses := rh.db.GetSymbolUses(use)
-	if len(uses) == 0 {
-		return fmt.Errorf("Symbol use not found")
+	uses, err := rh.db.GetSymbolUses(use)
+	if err != nil {
+		return err
 	}
 	*res = uses
 	return nil
@@ -57,12 +56,15 @@ func (rh *RequestHandler) GetSymbolUses(use *SymbolLocReq, res *[]*SymbolLocReq)
 // GetSymbolDef gets a symbol use location and returns the definition location
 // of the symbol. If not available, it returns an error.
 func (rh *RequestHandler) GetSymbolDef(use *SymbolLocReq, res *[]*SymbolLocReq) error {
-	def := rh.db.GetSymbolDef(use)
+	def, err := rh.db.GetSymbolDef(use)
+	if err != nil {
+		return err
+	}
 	if def == nil {
 		// find all definitions with the same name
-		defs := rh.db.GetAllSymbolDefs(use)
-		if len(defs) == 0 {
-			return fmt.Errorf("Definition not found")
+		defs, err := rh.db.GetAllSymbolDefs(use)
+		if err != nil {
+			return err
 		}
 		*res = defs
 		return nil
