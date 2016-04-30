@@ -135,15 +135,15 @@ type symbolsTUDB struct {
 
 type tuSymbolsDBCache struct {
 	tudb  *symbolsTUDB
-	mtime time.Time
-	path  string
+	Mtime time.Time
+	Path  string
 
 	accTime time.Time
 	dirty   bool
 }
 
 type symbolsDB struct {
-	tuDBs map[fileID]*tuSymbolsDBCache
+	TUDBs map[fileID]*tuSymbolsDBCache
 }
 
 // db directory path
@@ -151,6 +151,9 @@ var dbDirPath string
 
 // db temp directory = dbDirPath + "/tmp"
 var dbDirTmp string
+
+// db index file = dbDirPath + "/index"
+var dbDirIndex string
 
 ///// Helper functions
 
@@ -173,39 +176,57 @@ func newSymbolsDB(dbDirPathIn string) *symbolsDB {
 	}
 	dbDirPath = dbDirPathIn
 	dbDirTmp = dbDirPath + "/tmp"
+	dbDirIndex = dbDirPath + "/index"
 
-	db := &symbolsDB{make(map[fileID]*tuSymbolsDBCache)}
-
-	// cache index
-	filepath.Walk(dbDirPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			log.Println("error opening", path, "ignoring", err)
-			return filepath.SkipDir
-		}
-
-		if path != dbDirPath && info.IsDir() {
-			return filepath.SkipDir
-		}
-
-		tudb, ferr := loadSymbolsTUDB(path)
-		if ferr != nil {
-			return nil
-		}
-
-		db.tuDBs[getStringEncode(tudb.File)] = &tuSymbolsDBCache{
-			tudb:  tudb,
-			path:  tudb.File,
-			mtime: tudb.Mtime,
-		}
-
+	newDB, err := loadSymbolsDBIndex()
+	if err != nil && os.IsNotExist(err) {
+		newDB = &symbolsDB{make(map[fileID]*tuSymbolsDBCache)}
+	} else if err != nil {
 		return nil
-	})
+	}
 
-	return db
+	return newDB
+}
+
+func loadSymbolsDBIndex() (*symbolsDB, error) {
+	var index symbolsDB
+
+	indexFile, err := os.Open(dbDirIndex)
+	if err != nil {
+		return nil, err
+	}
+	defer indexFile.Close()
+
+	dec := gob.NewDecoder(indexFile)
+
+	err = dec.Decode(&index)
+	if err != nil {
+		return nil, err
+	}
+
+	return &index, nil
+}
+
+func (db *symbolsDB) saveSymbolsDBIndex() error {
+	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	indexFile, err := os.OpenFile(dbDirIndex, flags, 0644)
+	if err != nil {
+		return err
+	}
+	defer indexFile.Close()
+
+	enc := gob.NewEncoder(indexFile)
+
+	err = enc.Encode(db)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (db *symbolsDB) FlushDB(saveFrom time.Time) error {
-	for _, cache := range db.tuDBs {
+	for _, cache := range db.TUDBs {
 		if cache.tudb == nil {
 			continue
 		}
@@ -215,7 +236,7 @@ func (db *symbolsDB) FlushDB(saveFrom time.Time) error {
 		}
 
 		if cache.dirty {
-			err := cache.tudb.SaveSymbolsTUDB(getDBFileName(cache.path))
+			err := cache.tudb.SaveSymbolsTUDB(getDBFileName(cache.Path))
 			if err != nil {
 				return err
 			}
@@ -223,6 +244,8 @@ func (db *symbolsDB) FlushDB(saveFrom time.Time) error {
 		cache.dirty = false
 		cache.tudb = nil
 	}
+
+	db.saveSymbolsDBIndex()
 
 	return nil
 }
@@ -236,7 +259,7 @@ func getDBFileName(file string) string {
 }
 
 func (db *symbolsDB) FileExist(filePath string) bool {
-	return db.tuDBs[getStringEncode(filePath)] != nil
+	return db.TUDBs[getStringEncode(filePath)] != nil
 }
 
 func (db *symbolsDB) LoadSymbolsTUDBFromSha1(file fileID) (*symbolsTUDB, error) {
@@ -251,7 +274,7 @@ func (db *symbolsDB) LoadSymbolsTUDBFromSha1(file fileID) (*symbolsTUDB, error) 
 func (db *symbolsDB) getListOfFilenames(fileSet map[fileID]bool) []string {
 	filenames := []string{}
 	for fid := range fileSet {
-		filenames = append(filenames, db.tuDBs[fid].path)
+		filenames = append(filenames, db.TUDBs[fid].Path)
 	}
 
 	return filenames
@@ -262,10 +285,10 @@ func (db *symbolsDB) GetIncluders(headPath string) ([]string, error) {
 	hmtime := time.Time{}
 	headID := getStringEncode(headPath)
 
-	if db.tuDBs[headID] == nil {
+	if db.TUDBs[headID] == nil {
 		// lets try for inexistent but potential headers
 		headID = getStringEncode(nonExistingHeaderName(headPath))
-		if db.tuDBs[headID] == nil {
+		if db.TUDBs[headID] == nil {
 			return []string{}, nil
 		}
 		realHeader = false
@@ -308,12 +331,12 @@ func (db *symbolsDB) UptodateFile(file string) (bool, bool, error) {
 	}
 
 	fileSha1 := getStringEncode(file)
-	cache := db.tuDBs[fileSha1]
+	cache := db.TUDBs[fileSha1]
 	if cache == nil {
 		return false, false, nil
 	}
 
-	if cache.mtime.Before(info.ModTime()) {
+	if cache.Mtime.Before(info.ModTime()) {
 		return true, false, nil
 	}
 
@@ -321,7 +344,7 @@ func (db *symbolsDB) UptodateFile(file string) (bool, bool, error) {
 }
 
 func (db *symbolsDB) GetSymbolsTUDB(fid fileID) (*symbolsTUDB, error) {
-	cache := db.tuDBs[fid]
+	cache := db.TUDBs[fid]
 
 	if cache == nil {
 		return nil, fmt.Errorf("File not in DB")
@@ -349,10 +372,10 @@ func (db *symbolsDB) removeFileFromHeader(headerID, fid fileID) error {
 	}
 
 	delete(tudb.Includers, fid)
-	db.tuDBs[headerID].dirty = true
+	db.TUDBs[headerID].dirty = true
 
 	if len(tudb.Includers) == 0 {
-		delete(db.tuDBs, headerID)
+		delete(db.TUDBs, headerID)
 		os.Remove(getDBFileNameFromSha1(headerID))
 	}
 
@@ -374,7 +397,7 @@ func (db *symbolsDB) RemoveFileReferences(file string) error {
 		}
 	}
 
-	delete(db.tuDBs, fileSha1)
+	delete(db.TUDBs, fileSha1)
 	os.Remove(getDBFileName(file))
 
 	return nil
@@ -383,12 +406,12 @@ func (db *symbolsDB) RemoveFileReferences(file string) error {
 func (db *symbolsDB) GetSetFilesInDB() map[string]bool {
 	fileSet := map[string]bool{}
 
-	for _, cache := range db.tuDBs {
-		if cache.mtime.IsZero() {
+	for _, cache := range db.TUDBs {
+		if cache.Mtime.IsZero() {
 			// ignore false files
 			continue
 		}
-		fileSet[cache.path] = true
+		fileSet[cache.Path] = true
 	}
 
 	return fileSet
@@ -413,11 +436,11 @@ func (db *symbolsDB) RemoveFileDepsReferences(file string) ([]string, error) {
 func (db *symbolsDB) InsertTUDB(tudb *symbolsTUDB) error {
 	var err error
 	fileSha1 := getStringEncode(tudb.File)
-	otudb := db.tuDBs[fileSha1]
+	otudb := db.TUDBs[fileSha1]
 
 	if otudb != nil {
-		if otudb.mtime.After(tudb.Mtime) {
-			log.Panic("Inserting older tudb", otudb.path, otudb.mtime, tudb.Mtime)
+		if otudb.Mtime.After(tudb.Mtime) {
+			log.Panic("Inserting older tudb", otudb.Path, otudb.Mtime, tudb.Mtime)
 		}
 
 		db.RemoveFileReferences(tudb.File)
@@ -427,16 +450,16 @@ func (db *symbolsDB) InsertTUDB(tudb *symbolsTUDB) error {
 		var htudb *symbolsTUDB
 		headerSha1 := getStringEncode(header)
 
-		hcache := db.tuDBs[headerSha1]
+		hcache := db.TUDBs[headerSha1]
 		if hcache == nil {
 			htudb = newSymbolsTUDB(header, tudb.Headers[headerSha1])
 			hcache = &tuSymbolsDBCache{
 				tudb:    htudb,
-				mtime:   htudb.Mtime,
-				path:    htudb.File,
+				Mtime:   htudb.Mtime,
+				Path:    htudb.File,
 				accTime: time.Now(),
 			}
-			db.tuDBs[headerSha1] = hcache
+			db.TUDBs[headerSha1] = hcache
 		} else {
 			htudb, err = db.GetSymbolsTUDB(headerSha1)
 			if err != nil {
@@ -452,9 +475,9 @@ func (db *symbolsDB) InsertTUDB(tudb *symbolsTUDB) error {
 	if err != nil {
 		return err
 	}
-	db.tuDBs[fileSha1] = &tuSymbolsDBCache{
-		mtime: tudb.Mtime,
-		path:  tudb.File,
+	db.TUDBs[fileSha1] = &tuSymbolsDBCache{
+		Mtime: tudb.Mtime,
+		Path:  tudb.File,
 	}
 
 	return nil
@@ -475,13 +498,13 @@ func (db *symbolsDB) getSymbolLocReq(syms []symbolLoc) []*SymbolLocReq {
 	res := []*SymbolLocReq{}
 
 	for _, sym := range syms {
-		cache := db.tuDBs[sym.File]
+		cache := db.TUDBs[sym.File]
 		if cache == nil {
 			continue
 		}
 
 		res = append(res, &SymbolLocReq{
-			cache.path,
+			cache.Path,
 			int(sym.Line),
 			int(sym.Col),
 		})
