@@ -3,3 +3,4 @@
 sample
 *.pyc
 *.swp
+cscope.*
