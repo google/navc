@@ -42,13 +42,11 @@ func openDB(t *testing.T) *symbolsDB {
 }
 
 func closeDB(t *testing.T, sdb *symbolsDB) {
-	err := sdb.Close()
-	if err != nil {
+	if err := sdb.Close(); err != nil {
 		t.Errorf("Error closing db: %v", err)
 	}
 
-	err = os.RemoveAll(testDir)
-	if err != nil {
+	if err := os.RemoveAll(testDir); err != nil {
 		t.Errorf("Error removing dir %s: %v", testDir, err)
 	}
 }
@@ -80,7 +78,10 @@ func getRandTUDBs(t *testing.T, hs int, cs int) ([]*symbolsTUDB, map[string][]st
 		if err != nil {
 			t.Errorf("Couldn't open file %s: %v", filePath, err)
 		}
-		defer file.Close()
+		err = file.Close()
+		if err != nil {
+			t.Errorf("Couldn't close file %s: %v", filePath, err)
+		}
 
 		headers = append(headers, fileName)
 		headIncluders[filePath] = []string{}
@@ -97,11 +98,14 @@ func getRandTUDBs(t *testing.T, hs int, cs int) ([]*symbolsTUDB, map[string][]st
 		if err != nil {
 			t.Errorf("Couldn't open file %s: %v", filePath, err)
 		}
-		defer file.Close()
 
 		_, err = file.WriteString("#include \"" + randHeader + "\"")
 		if err != nil {
 			t.Errorf("Couldn't write file %s: %v", filePath, err)
+		}
+		err = file.Close()
+		if err != nil {
+			t.Errorf("Couldn't close file %s: %v", filePath, err)
 		}
 
 		tudb := NewSymbolsTUDB(filePath, now)
