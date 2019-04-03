@@ -22,14 +22,14 @@ import (
 	//"encoding/hex"
 	//"io/ioutil"
 	"bytes"
-	"fmt"
-	"log"
+	//"fmt"
+	//"log"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/dgraph-io/badger"
-	"github.com/go-clang/v3.6/clang"
+	//"github.com/go-clang/v3.6/clang"
 )
 
 type symbolID [sha1.Size]byte
@@ -397,8 +397,6 @@ func (db *symbolsDB) retryUpdate(fn func(txn *badger.Txn) error) error {
 	return err
 }
 
-/*
-
 ///// TU Symbol methods
 
 func NewSymbolsTUDB(file string, mtime time.Time) *symbolsTUDB {
@@ -423,6 +421,7 @@ func (db *symbolsTUDB) InsertSymbolDeclWithDef(sym, def *symbolInfo) {
 	db.insertSymbolDeclWithDef(sym, def)
 }
 
+/*
 func (db *symbolsTUDB) InsertSymbolUse(sym, dec *symbolInfo, funcCall bool) {
 	if dec == nil {
 		log.Println("use without decl, ignoring", sym)
@@ -476,6 +475,7 @@ func (db *symbolsTUDB) InsertHeader(inclPath string, headFile clang.File) {
 	db.Headers[getStringEncode(headPath)] = headModTime
 	db.headersTUDB[headPath] = true
 }
+*/
 
 ///// SymbolsTUDB helper methods
 
@@ -507,6 +507,7 @@ func (db *symbolsTUDB) insertSymbolDeclWithDef(sym, def *symbolInfo) {
 	db.SymData[id] = data
 }
 
+/*
 func (db *symbolsTUDB) check() {
 	// check sym data
 	for _, data := range db.SymData {
@@ -556,6 +557,7 @@ func (db *symbolsTUDB) printAndCheck() {
 		}
 	}
 }
+*/
 
 func getSymbolLoc(sym *SymbolLocReq) *symbolLoc {
 	fileSha1 := getStringEncode(filepath.Clean(sym.File))
@@ -566,6 +568,7 @@ func getSymbolLoc(sym *SymbolLocReq) *symbolLoc {
 	}
 }
 
+/*
 ///// Symbols DB query methods
 
 func (db *symbolsDB) GetSymbolDecl(useReq *SymbolLocReq) ([]*SymbolLocReq, error) {

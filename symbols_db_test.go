@@ -62,6 +62,30 @@ func getRandomFileName(t *testing.T) string {
 	return hex.EncodeToString(sha1Value[:])
 }
 
+func getRandSymbolInfo(t *testing.T, tudb *symbolsTUDB) *symbolInfo {
+	return &symbolInfo{
+		name: getRandomFileName(t),
+		usr:  getRandomFileName(t),
+		//loc:  getRandSymbolLocReq(tudb),
+		loc: SymbolLocReq{
+			File: tudb.File,
+			Line: rand.Intn(10000),
+			Col:  rand.Intn(80),
+		},
+	}
+}
+
+func populateRandSymbols(t *testing.T, tudb *symbolsTUDB) {
+	for s := 0; s < 100; s++ {
+		sym := getRandSymbolInfo(t, tudb)
+		if rand.Intn(100) < 10 {
+			tudb.InsertSymbolDecl(sym)
+		} else {
+			tudb.InsertSymbolDeclWithDef(sym, sym)
+		}
+	}
+}
+
 func getRandTUDBs(t *testing.T, hs int, cs int) ([]*symbolsTUDB, map[string][]string, map[string]bool) {
 	var headers []string
 	var tudbs []*symbolsTUDB
@@ -111,6 +135,8 @@ func getRandTUDBs(t *testing.T, hs int, cs int) ([]*symbolsTUDB, map[string][]st
 		tudb := NewSymbolsTUDB(filePath, now)
 		tudb.Headers[getStringEncode(randHeaderPath)] = now
 		tudb.headersTUDB[randHeaderPath] = true
+
+		populateRandSymbols(t, tudb)
 
 		tudbs = append(tudbs, tudb)
 		headIncluders[randHeaderPath] = append(headIncluders[randHeaderPath], filePath)
